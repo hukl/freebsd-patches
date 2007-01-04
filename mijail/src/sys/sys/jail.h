@@ -6,7 +6,7 @@
  * this stuff is worth it, you can buy me a beer in return.   Poul-Henning Kamp
  * ----------------------------------------------------------------------------
  *
- * $FreeBSD: src/sys/sys/jail.h,v 1.26 2005/06/09 18:49:19 pjd Exp $
+ * $FreeBSD: /repoman/r/ncvs/src/sys/sys/jail.h,v 1.26 2005/06/09 18:49:19 pjd Exp $
  *
  */
 
@@ -17,17 +17,21 @@ struct jail {
 	u_int32_t	version;
 	char		*path;
 	char		*hostname;
-	u_int32_t	ip_number;
+	u_int32_t	*ips;
+	u_int		nips;
 };
 
+#define	JAIL_MAX_IPS	256
+
 struct xprison {
-	int		 pr_version;
-	int		 pr_id;
-	char		 pr_path[MAXPATHLEN];
-	char 		 pr_host[MAXHOSTNAMELEN];
-	u_int32_t	 pr_ip;
+	int		pr_version;
+	int		pr_id;
+	char		pr_path[MAXPATHLEN];
+	char		pr_host[MAXHOSTNAMELEN];
+	u_int32_t	pr_ips[JAIL_MAX_IPS];
+	u_int		pr_nips;
 };
-#define	XPRISON_VERSION	1
+#define	XPRISON_VERSION	2
 
 #ifndef _KERNEL
 
@@ -47,6 +51,12 @@ int jail_attach(int);
 MALLOC_DECLARE(M_PRISON);
 #endif
 #endif /* _KERNEL */
+
+struct prip {
+	u_int32_t	 pi_ip;
+	struct prip	*pi_left;
+	struct prip	*pi_right;
+};
 
 /*
  * This structure describes a prison.  It is pointed to by all struct
@@ -68,11 +78,12 @@ struct prison {
 	char		 pr_path[MAXPATHLEN];		/* (c) chroot path */
 	struct vnode	*pr_root;			/* (c) vnode to rdir */
 	char 		 pr_host[MAXHOSTNAMELEN];	/* (p) jail hostname */
-	u_int32_t	 pr_ip;				/* (c) ip addr host */
 	void		*pr_linux;			/* (p) linux abi */
 	int		 pr_securelevel;		/* (p) securelevel */
 	struct task	 pr_task;			/* (d) destroy task */
 	struct mtx	 pr_mtx;
+	u_int		 pr_nips;			/* (c) number of ips */
+	struct prip	 pr_ips[];			/* (c) jail's IPs */
 };
 #endif /* _KERNEL || _WANT_PRISON */
 
@@ -88,6 +99,7 @@ extern int	jail_sysvipc_allowed;
 extern int	jail_getfsstat_jailrootonly;
 extern int	jail_allow_raw_sockets;
 extern int	jail_chflags_allowed;
+extern int	jail_jailed_sockets_first;
 
 LIST_HEAD(prisonlist, prison);
 extern struct	prisonlist allprison;
@@ -111,6 +123,7 @@ void prison_hold(struct prison *pr);
 int prison_if(struct ucred *cred, struct sockaddr *sa);
 int prison_ip(struct ucred *cred, int flag, u_int32_t *ip);
 void prison_remote_ip(struct ucred *cred, int flags, u_int32_t *ip);
+int jailed_ip(struct ucred *cred, u_int32_t ip);
 
 #endif /* _KERNEL */
 #endif /* !_SYS_JAIL_H_ */
