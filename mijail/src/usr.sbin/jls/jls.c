@@ -43,7 +43,7 @@ main(void)
 { 
 	struct xprison *sxp, *xp;
 	struct in_addr in;
-	size_t i, len;
+	size_t i, j, len;
 
 	if (sysctlbyname("security.jail.list", NULL, &len, NULL, 0) == -1)
 		err(1, "sysctlbyname(): security.jail.list");
@@ -73,9 +73,13 @@ main(void)
 
 	printf("   JID  IP Address      Hostname                      Path\n");
 	for (i = 0; i < len / sizeof(*xp); i++) {
-		in.s_addr = ntohl(xp->pr_ip);
+		in.s_addr = ntohl(xp->pr_ips[0]);
 		printf("%6d  %-15.15s %-29.29s %.74s\n",
 		    xp->pr_id, inet_ntoa(in), xp->pr_host, xp->pr_path);
+		for (j = 1; j < xp->pr_nips; j++) {
+			in.s_addr = ntohl(xp->pr_ips[j]);
+			printf("        %-15.15s\n", inet_ntoa(in));
+		}
 		xp++;
 	}
 	free(sxp);

@@ -56,7 +56,7 @@ main(int argc, char **argv)
 	struct in_addr in;
 	gid_t groups[NGROUPS];
 	int ch, i, iflag, Jflag, lflag, ngroups, securelevel, uflag, Uflag;
-	char path[PATH_MAX], *ep, *username, *JidFile;
+	char path[PATH_MAX], *ep, *username, *ip, *JidFile;
 	static char *cleanenv;
 	const char *shell, *p = NULL;
 	long ltmp;
@@ -112,12 +112,26 @@ main(int argc, char **argv)
 	if (chdir(path) != 0)
 		err(1, "chdir: %s", path);
 	memset(&j, 0, sizeof(j));
-	j.version = 0;
+	j.version = 1;
 	j.path = path;
 	j.hostname = argv[1];
-	if (inet_aton(argv[2], &in) == 0)
-		errx(1, "Could not make sense of ip-number: %s", argv[2]);
-	j.ip_number = ntohl(in.s_addr);
+
+    for (i = 1, ip = argv[2]; *ip; ip++) {
+            if (*ip == ',')
+                    i++;
+    }
+    if ((j.ips = (u_int32_t *)malloc(sizeof(u_int32_t) * i)) == NULL)
+            errx(1, "malloc()");
+    for (i = 0, ip = strtok(argv[2], ","); ip;
+        i++, ip = strtok(NULL, ",")) {
+            if (inet_aton(ip, &in) == 0) {
+                    free(j.ips);
+                    errx(1, "Couldn't make sense of ip-number: %s", ip);
+            }
+            j.ips[i] = ntohl(in.s_addr);
+    }
+    j.nips = i;
+
 	if (Jflag) {
 		fp = fopen(JidFile, "w");
 		if (fp == NULL)
@@ -185,6 +199,6 @@ usage(void)
 	(void)fprintf(stderr, "%s%s%s\n",
 	     "usage: jail [-i] [-J jid_file] [-s securelevel] [-l -u ",
 	     "username | -U username]",
-	     " path hostname ip-number command ...");
+	     " path hostname ip1[,ip2[...]] command ...");
 	exit(1);
 }

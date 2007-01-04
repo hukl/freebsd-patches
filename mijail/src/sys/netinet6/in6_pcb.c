@@ -212,9 +212,9 @@ in6_pcbbind(inp, nam, cred)
 					struct sockaddr_in sin;
 
 					in6_sin6_2_sin(&sin, sin6);
-					t = in_pcblookup_local(pcbinfo,
-						sin.sin_addr, lport,
-						INPLOOKUP_WILDCARD);
+					t = in_pcblookup_local(cred, pcbinfo,
+					    sin.sin_addr, lport,
+					    INPLOOKUP_WILDCARD);
 					if (t &&
 					    ((t->inp_vflag &
 					      INP_TIMEWAIT) == 0) &&
@@ -237,8 +237,8 @@ in6_pcbbind(inp, nam, cred)
 				struct sockaddr_in sin;
 
 				in6_sin6_2_sin(&sin, sin6);
-				t = in_pcblookup_local(pcbinfo, sin.sin_addr,
-						       lport, wild);
+				t = in_pcblookup_local(cred, pcbinfo,
+				    sin.sin_addr, lport, wild);
 				if (t && t->inp_vflag & INP_TIMEWAIT) {
 					if ((reuseport & 
 					    intotw(t)->tw_so_options) == 0 &&

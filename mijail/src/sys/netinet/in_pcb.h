@@ -339,6 +339,8 @@ extern int	ipport_hifirstauto;
 extern int	ipport_hilastauto;
 extern struct callout ipport_tick_callout;
 
+struct ucred;
+
 void	in_pcbpurgeif0(struct inpcbinfo *, struct ifnet *);
 int	in_pcballoc(struct socket *, struct inpcbinfo *, const char *);
 int	in_pcbbind(struct inpcb *, struct sockaddr *, struct ucred *);
@@ -352,7 +354,7 @@ void	in_pcbdetach(struct inpcb *);
 void	in_pcbdisconnect(struct inpcb *);
 int	in_pcbinshash(struct inpcb *);
 struct inpcb *
-	in_pcblookup_local(struct inpcbinfo *,
+	in_pcblookup_local(struct ucred *, struct inpcbinfo *,
 	    struct in_addr, u_int, int);
 struct inpcb *
 	in_pcblookup_hash(struct inpcbinfo *, struct in_addr, u_int,

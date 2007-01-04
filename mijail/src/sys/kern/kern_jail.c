@@ -71,6 +71,11 @@ SYSCTL_INT(_security_jail, OID_AUTO, chflags_allowed, CTLFLAG_RW,
     &jail_chflags_allowed, 0,
     "Processes in jail can alter system file flags");
 
+int	jail_jailed_sockets_first = 1;
+SYSCTL_INT(_security_jail, OID_AUTO, jailed_sockets_first, CTLFLAG_RW,
+    &jail_jailed_sockets_first, 0,
+    "Choose jailed sockets before non-jailed sockets");
+
 /* allprison, lastprid, and prisoncount are protected by allprison_mtx. */
 struct	prisonlist allprison;
 struct	mtx allprison_mtx;
@@ -92,6 +97,45 @@ init_prison(void *data __unused)
 
 SYSINIT(prison, SI_SUB_INTRINSIC, SI_ORDER_ANY, init_prison, NULL);
 
+static int
+qcmp(const void *ip1, const void *ip2)
+{
+
+	return (*(const u_int32_t *)ip1 - *(const u_int32_t *)ip2);
+}
+static void
+create_tree(struct prip **stab, u_int32_t *tab, size_t size)
+{
+	struct prip *node;
+	u_int32_t *center;
+	size_t psize;
+
+	node = *stab;
+	center = tab + (size / 2);
+	node->pi_ip = *center;
+	if (size <= 1) {
+		node->pi_left = NULL;
+		node->pi_right = NULL;
+		return;
+	}
+	psize = size / 2;
+	if (psize > 0) {
+		(*stab)++;
+		node->pi_left = *stab;
+		create_tree(stab, tab, psize);
+	} else {
+		node->pi_left = NULL;
+	}
+	psize += (size % 2) - 1;
+	if (psize > 0) {
+		(*stab)++;
+		node->pi_right = *stab;
+		create_tree(stab, center + 1, psize);
+	} else {
+		node->pi_right = NULL;
+	}
+}
+
 /*
  * MPSAFE
  *
@@ -106,15 +150,30 @@ jail(struct thread *td, struct jail_args *uap)
 	struct prison *pr, *tpr;
 	struct jail j;
 	struct jail_attach_args jaa;
-	int vfslocked, error, tryprid;
+	u_int32_t ips[JAIL_MAX_IPS];
+	struct prip *head;
+	int vfslocked, error, i, tryprid;
 
 	error = copyin(uap->jail, &j, sizeof(j));
 	if (error)
 		return (error);
-	if (j.version != 0)
+	if (j.version != 1)
 		return (EINVAL);
 
-	MALLOC(pr, struct prison *, sizeof(*pr), M_PRISON, M_WAITOK | M_ZERO);
+	if (j.nips <= 0 || j.nips >= JAIL_MAX_IPS)
+		return (EINVAL);
+	error = copyin(j.ips, ips, sizeof(u_int32_t) * j.nips);
+	if (error)
+		return (error);
+	/* Sort table with IP addresses. */
+	qsort(ips, j.nips, sizeof(ips[0]), qcmp);
+	/* Check for duplicated IPs. */
+	for (i = 0; i < j.nips - 1; i++) {
+		if (ips[i] == ips[i + 1])
+			return (EINVAL);
+	}
+	MALLOC(pr, struct prison *, sizeof(*pr) + j.nips * sizeof(struct prip),
+	    M_PRISON, M_WAITOK | M_ZERO);
 	mtx_init(&pr->pr_mtx, "jail mutex", NULL, MTX_DEF);
 	pr->pr_ref = 1;
 	error = copyinstr(j.path, &pr->pr_path, sizeof(pr->pr_path), 0);
@@ -133,7 +192,9 @@ jail(struct thread *td, struct jail_args *uap)
 	error = copyinstr(j.hostname, &pr->pr_host, sizeof(pr->pr_host), 0);
 	if (error)
 		goto e_dropvnref;
-	pr->pr_ip = j.ip_number;
+	head = (struct prip *)(pr + 1);
+	create_tree(&head, ips, j.nips);
+	pr->pr_nips = j.nips;
 	pr->pr_linux = NULL;
 	pr->pr_securelevel = securelevel;
 
@@ -321,7 +382,7 @@ u_int32_t
 prison_getip(struct ucred *cred)
 {
 
-	return (cred->cr_prison->pr_ip);
+	return (cred->cr_prison->pr_ips[0].pi_ip);
 }
 
 int
@@ -335,23 +396,16 @@ prison_ip(struct ucred *cred, int flag, u_int32_t *ip)
 		tmp = *ip;
 	else
 		tmp = ntohl(*ip);
-	if (tmp == INADDR_ANY) {
-		if (flag) 
-			*ip = cred->cr_prison->pr_ip;
-		else
-			*ip = htonl(cred->cr_prison->pr_ip);
-		return (0);
-	}
 	if (tmp == INADDR_LOOPBACK) {
 		if (flag)
-			*ip = cred->cr_prison->pr_ip;
+			*ip = cred->cr_prison->pr_ips[0].pi_ip;
 		else
-			*ip = htonl(cred->cr_prison->pr_ip);
+			*ip = htonl(cred->cr_prison->pr_ips[0].pi_ip);
 		return (0);
 	}
-	if (cred->cr_prison->pr_ip != tmp)
-		return (1);
-	return (0);
+	if (tmp == INADDR_ANY || jailed_ip(cred, tmp))
+		return (0);
+	return (1);
 }
 
 void
@@ -367,9 +421,9 @@ prison_remote_ip(struct ucred *cred, int flag, u_int32_t *ip)
 		tmp = ntohl(*ip);
 	if (tmp == INADDR_LOOPBACK) {
 		if (flag)
-			*ip = cred->cr_prison->pr_ip;
+			*ip = cred->cr_prison->pr_ips[0].pi_ip;
 		else
-			*ip = htonl(cred->cr_prison->pr_ip);
+			*ip = htonl(cred->cr_prison->pr_ips[0].pi_ip);
 		return;
 	}
 	return;
@@ -386,11 +440,30 @@ prison_if(struct ucred *cred, struct sockaddr *sa)
 		ok = 1;
 	else if (sai->sin_family != AF_INET)
 		ok = 0;
-	else if (cred->cr_prison->pr_ip != ntohl(sai->sin_addr.s_addr))
+	else if (!jailed_ip(cred, ntohl(sai->sin_addr.s_addr)))
 		ok = 1;
 	else
 		ok = 0;
 	return (ok);
+}
+
+int
+jailed_ip(struct ucred *cred, u_int32_t ip)
+{
+	struct prip *node;
+
+	if (!jailed(cred))
+		return (1);
+
+	for (node = cred->cr_prison->pr_ips; node != NULL;) {
+		if (node->pi_ip == ip)
+			return (1);
+		else if (ip > node->pi_ip)
+			node = node->pi_right;
+		else /* if (ip < node->pi_ip) */
+			node = node->pi_left;
+	}
+	return (0);
 }
 
 /*
@@ -528,7 +601,7 @@ sysctl_jail_list(SYSCTL_HANDLER_ARGS)
 {
 	struct xprison *xp, *sxp;
 	struct prison *pr;
-	int count, error;
+	int count, error, i;
 
 	if (jailed(req->td->td_ucred))
 		return (0);
@@ -554,8 +627,11 @@ retry:
 		xp->pr_id = pr->pr_id;
 		strlcpy(xp->pr_path, pr->pr_path, sizeof(xp->pr_path));
 		strlcpy(xp->pr_host, pr->pr_host, sizeof(xp->pr_host));
-		xp->pr_ip = pr->pr_ip;
+		for (i = 0; i < pr->pr_nips; i++)
+			xp->pr_ips[i] = pr->pr_ips[i].pi_ip;
+		xp->pr_nips = pr->pr_nips;
 		mtx_unlock(&pr->pr_mtx);
+		qsort(xp->pr_ips, xp->pr_nips, sizeof(xp->pr_ips[0]), qcmp);
 		xp++;
 	}
 	mtx_unlock(&allprison_mtx);

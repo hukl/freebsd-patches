@@ -224,10 +224,10 @@ rip_input(struct mbuf *m, int off)
 		if (inp->inp_faddr.s_addr &&
 		    inp->inp_faddr.s_addr != ip->ip_src.s_addr)
 			goto docontinue;
-		if (jailed(inp->inp_socket->so_cred))
-			if (htonl(prison_getip(inp->inp_socket->so_cred)) !=
-			    ip->ip_dst.s_addr)
-				goto docontinue;
+		if (!jailed_ip(inp->inp_socket->so_cred,
+		    ntohl(ip->ip_dst.s_addr))) {
+			goto docontinue;
+		}
 		if (last) {
 			struct mbuf *n;
 
@@ -300,13 +300,11 @@ rip_output(struct mbuf *m, struct socket *so, u_long dst)
 		}
 		INP_LOCK(inp);
 		ip = mtod(m, struct ip *);
-		if (jailed(inp->inp_socket->so_cred)) {
-			if (ip->ip_src.s_addr !=
-			    htonl(prison_getip(inp->inp_socket->so_cred))) {
-				INP_UNLOCK(inp);
-				m_freem(m);
-				return (EPERM);
-			}
+		if (!jailed_ip(inp->inp_socket->so_cred,
+		    ntohl(ip->ip_src.s_addr))) {
+			INP_UNLOCK(inp);
+			m_freem(m);
+			return (EPERM);
 		}
 		/* don't allow both user specified and setsockopt options,
 		   and don't allow packet length sizes that will crash */
@@ -700,13 +698,8 @@ rip_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 	if (nam->sa_len != sizeof(*addr))
 		return EINVAL;
 
-	if (jailed(td->td_ucred)) {
-		if (addr->sin_addr.s_addr == INADDR_ANY)
-			addr->sin_addr.s_addr =
-			    htonl(prison_getip(td->td_ucred));
-		if (htonl(prison_getip(td->td_ucred)) != addr->sin_addr.s_addr)
-			return (EADDRNOTAVAIL);
-	}
+	if (!jailed_ip(td->td_ucred, ntohl(addr->sin_addr.s_addr)))
+		return (EADDRNOTAVAIL);
 
 	if (TAILQ_EMPTY(&ifnet) ||
 	    (addr->sin_family != AF_INET && addr->sin_family != AF_IMPLINK) ||
