@@ -867,8 +867,7 @@ in_pcbpurgeif0(struct inpcbinfo *pcbinfo, struct ifnet *ifp)
  */
 #define INP_LOOKUP_MAPPED_PCB_COST	3
 struct inpcb *
-in_pcblookup_local(struct inpcbinfo *pcbinfo, struct in_addr laddr,
-    u_int lport_arg, int wild_okay)
+in_pcblookup_local(struct ucred *cred, struct inpcbinfo *pcbinfo, struct in_addr laddr, u_int lport_arg, int wild_okay)
 {
 	struct inpcb *inp;
 #ifdef INET6
