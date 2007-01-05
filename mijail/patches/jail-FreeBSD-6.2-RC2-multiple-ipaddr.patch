@@ -1,0 +1,788 @@
+--- /usr/src/usr.sbin/jail/jail.c	Fri Jan  5 20:31:20 2007
++++ usr.sbin/jail/jail.c	Fri Jan  5 19:12:10 2007
+@@ -56,7 +56,7 @@
+ 	struct in_addr in;
+ 	gid_t groups[NGROUPS];
+ 	int ch, i, iflag, Jflag, lflag, ngroups, securelevel, uflag, Uflag;
+-	char path[PATH_MAX], *ep, *username, *JidFile;
++	char path[PATH_MAX], *ep, *username, *ip, *JidFile;
+ 	static char *cleanenv;
+ 	const char *shell, *p = NULL;
+ 	long ltmp;
+@@ -112,12 +112,26 @@
+ 	if (chdir(path) != 0)
+ 		err(1, "chdir: %s", path);
+ 	memset(&j, 0, sizeof(j));
+-	j.version = 0;
++	j.version = 1;
+ 	j.path = path;
+ 	j.hostname = argv[1];
+-	if (inet_aton(argv[2], &in) == 0)
+-		errx(1, "Could not make sense of ip-number: %s", argv[2]);
+-	j.ip_number = ntohl(in.s_addr);
++
++    for (i = 1, ip = argv[2]; *ip; ip++) {
++            if (*ip == ',')
++                    i++;
++    }
++    if ((j.ips = (u_int32_t *)malloc(sizeof(u_int32_t) * i)) == NULL)
++            errx(1, "malloc()");
++    for (i = 0, ip = strtok(argv[2], ","); ip;
++        i++, ip = strtok(NULL, ",")) {
++            if (inet_aton(ip, &in) == 0) {
++                    free(j.ips);
++                    errx(1, "Couldn't make sense of ip-number: %s", ip);
++            }
++            j.ips[i] = ntohl(in.s_addr);
++    }
++    j.nips = i;
++
+ 	if (Jflag) {
+ 		fp = fopen(JidFile, "w");
+ 		if (fp == NULL)
+@@ -185,6 +199,6 @@
+ 	(void)fprintf(stderr, "%s%s%s\n",
+ 	     "usage: jail [-i] [-J jid_file] [-s securelevel] [-l -u ",
+ 	     "username | -U username]",
+-	     " path hostname ip-number command ...");
++	     " path hostname ip1[,ip2[...]] command ...");
+ 	exit(1);
+ }
+--- /usr/src/usr.sbin/jls/jls.c	Fri Jan  5 20:31:20 2007
++++ usr.sbin/jls/jls.c	Fri Jan  5 19:12:10 2007
+@@ -43,7 +43,7 @@
+ { 
+ 	struct xprison *sxp, *xp;
+ 	struct in_addr in;
+-	size_t i, len;
++	size_t i, j, len;
+ 
+ 	if (sysctlbyname("security.jail.list", NULL, &len, NULL, 0) == -1)
+ 		err(1, "sysctlbyname(): security.jail.list");
+@@ -73,9 +73,13 @@
+ 
+ 	printf("   JID  IP Address      Hostname                      Path\n");
+ 	for (i = 0; i < len / sizeof(*xp); i++) {
+-		in.s_addr = ntohl(xp->pr_ip);
++		in.s_addr = ntohl(xp->pr_ips[0]);
+ 		printf("%6d  %-15.15s %-29.29s %.74s\n",
+ 		    xp->pr_id, inet_ntoa(in), xp->pr_host, xp->pr_path);
++		for (j = 1; j < xp->pr_nips; j++) {
++			in.s_addr = ntohl(xp->pr_ips[j]);
++			printf("        %-15.15s\n", inet_ntoa(in));
++		}
+ 		xp++;
+ 	}
+ 	free(sxp);
+--- /usr/src/sys/kern/kern_jail.c	Fri Jan  5 20:31:20 2007
++++ sys/kern/kern_jail.c	Fri Jan  5 19:12:10 2007
+@@ -71,6 +71,11 @@
+     &jail_chflags_allowed, 0,
+     "Processes in jail can alter system file flags");
+ 
++int	jail_jailed_sockets_first = 1;
++SYSCTL_INT(_security_jail, OID_AUTO, jailed_sockets_first, CTLFLAG_RW,
++    &jail_jailed_sockets_first, 0,
++    "Choose jailed sockets before non-jailed sockets");
++
+ /* allprison, lastprid, and prisoncount are protected by allprison_mtx. */
+ struct	prisonlist allprison;
+ struct	mtx allprison_mtx;
+@@ -92,6 +97,45 @@
+ 
+ SYSINIT(prison, SI_SUB_INTRINSIC, SI_ORDER_ANY, init_prison, NULL);
+ 
++static int
++qcmp(const void *ip1, const void *ip2)
++{
++
++	return (*(const u_int32_t *)ip1 - *(const u_int32_t *)ip2);
++}
++static void
++create_tree(struct prip **stab, u_int32_t *tab, size_t size)
++{
++	struct prip *node;
++	u_int32_t *center;
++	size_t psize;
++
++	node = *stab;
++	center = tab + (size / 2);
++	node->pi_ip = *center;
++	if (size <= 1) {
++		node->pi_left = NULL;
++		node->pi_right = NULL;
++		return;
++	}
++	psize = size / 2;
++	if (psize > 0) {
++		(*stab)++;
++		node->pi_left = *stab;
++		create_tree(stab, tab, psize);
++	} else {
++		node->pi_left = NULL;
++	}
++	psize += (size % 2) - 1;
++	if (psize > 0) {
++		(*stab)++;
++		node->pi_right = *stab;
++		create_tree(stab, center + 1, psize);
++	} else {
++		node->pi_right = NULL;
++	}
++}
++
+ /*
+  * MPSAFE
+  *
+@@ -106,15 +150,30 @@
+ 	struct prison *pr, *tpr;
+ 	struct jail j;
+ 	struct jail_attach_args jaa;
+-	int vfslocked, error, tryprid;
++	u_int32_t ips[JAIL_MAX_IPS];
++	struct prip *head;
++	int vfslocked, error, i, tryprid;
+ 
+ 	error = copyin(uap->jail, &j, sizeof(j));
+ 	if (error)
+ 		return (error);
+-	if (j.version != 0)
++	if (j.version != 1)
+ 		return (EINVAL);
+ 
+-	MALLOC(pr, struct prison *, sizeof(*pr), M_PRISON, M_WAITOK | M_ZERO);
++	if (j.nips <= 0 || j.nips >= JAIL_MAX_IPS)
++		return (EINVAL);
++	error = copyin(j.ips, ips, sizeof(u_int32_t) * j.nips);
++	if (error)
++		return (error);
++	/* Sort table with IP addresses. */
++	qsort(ips, j.nips, sizeof(ips[0]), qcmp);
++	/* Check for duplicated IPs. */
++	for (i = 0; i < j.nips - 1; i++) {
++		if (ips[i] == ips[i + 1])
++			return (EINVAL);
++	}
++	MALLOC(pr, struct prison *, sizeof(*pr) + j.nips * sizeof(struct prip),
++	    M_PRISON, M_WAITOK | M_ZERO);
+ 	mtx_init(&pr->pr_mtx, "jail mutex", NULL, MTX_DEF);
+ 	pr->pr_ref = 1;
+ 	error = copyinstr(j.path, &pr->pr_path, sizeof(pr->pr_path), 0);
+@@ -133,7 +192,9 @@
+ 	error = copyinstr(j.hostname, &pr->pr_host, sizeof(pr->pr_host), 0);
+ 	if (error)
+ 		goto e_dropvnref;
+-	pr->pr_ip = j.ip_number;
++	head = (struct prip *)(pr + 1);
++	create_tree(&head, ips, j.nips);
++	pr->pr_nips = j.nips;
+ 	pr->pr_linux = NULL;
+ 	pr->pr_securelevel = securelevel;
+ 
+@@ -321,7 +382,7 @@
+ prison_getip(struct ucred *cred)
+ {
+ 
+-	return (cred->cr_prison->pr_ip);
++	return (cred->cr_prison->pr_ips[0].pi_ip);
+ }
+ 
+ int
+@@ -335,23 +396,16 @@
+ 		tmp = *ip;
+ 	else
+ 		tmp = ntohl(*ip);
+-	if (tmp == INADDR_ANY) {
+-		if (flag) 
+-			*ip = cred->cr_prison->pr_ip;
+-		else
+-			*ip = htonl(cred->cr_prison->pr_ip);
+-		return (0);
+-	}
+ 	if (tmp == INADDR_LOOPBACK) {
+ 		if (flag)
+-			*ip = cred->cr_prison->pr_ip;
++			*ip = cred->cr_prison->pr_ips[0].pi_ip;
+ 		else
+-			*ip = htonl(cred->cr_prison->pr_ip);
++			*ip = htonl(cred->cr_prison->pr_ips[0].pi_ip);
+ 		return (0);
+ 	}
+-	if (cred->cr_prison->pr_ip != tmp)
+-		return (1);
+-	return (0);
++	if (tmp == INADDR_ANY || jailed_ip(cred, tmp))
++		return (0);
++	return (1);
+ }
+ 
+ void
+@@ -367,9 +421,9 @@
+ 		tmp = ntohl(*ip);
+ 	if (tmp == INADDR_LOOPBACK) {
+ 		if (flag)
+-			*ip = cred->cr_prison->pr_ip;
++			*ip = cred->cr_prison->pr_ips[0].pi_ip;
+ 		else
+-			*ip = htonl(cred->cr_prison->pr_ip);
++			*ip = htonl(cred->cr_prison->pr_ips[0].pi_ip);
+ 		return;
+ 	}
+ 	return;
+@@ -386,13 +440,32 @@
+ 		ok = 1;
+ 	else if (sai->sin_family != AF_INET)
+ 		ok = 0;
+-	else if (cred->cr_prison->pr_ip != ntohl(sai->sin_addr.s_addr))
++	else if (!jailed_ip(cred, ntohl(sai->sin_addr.s_addr)))
+ 		ok = 1;
+ 	else
+ 		ok = 0;
+ 	return (ok);
+ }
+ 
++int
++jailed_ip(struct ucred *cred, u_int32_t ip)
++{
++	struct prip *node;
++
++	if (!jailed(cred))
++		return (1);
++
++	for (node = cred->cr_prison->pr_ips; node != NULL;) {
++		if (node->pi_ip == ip)
++			return (1);
++		else if (ip > node->pi_ip)
++			node = node->pi_right;
++		else /* if (ip < node->pi_ip) */
++			node = node->pi_left;
++	}
++	return (0);
++}
++
+ /*
+  * Return 0 if jails permit p1 to frob p2, otherwise ESRCH.
+  */
+@@ -528,7 +601,7 @@
+ {
+ 	struct xprison *xp, *sxp;
+ 	struct prison *pr;
+-	int count, error;
++	int count, error, i;
+ 
+ 	if (jailed(req->td->td_ucred))
+ 		return (0);
+@@ -554,8 +627,11 @@
+ 		xp->pr_id = pr->pr_id;
+ 		strlcpy(xp->pr_path, pr->pr_path, sizeof(xp->pr_path));
+ 		strlcpy(xp->pr_host, pr->pr_host, sizeof(xp->pr_host));
+-		xp->pr_ip = pr->pr_ip;
++		for (i = 0; i < pr->pr_nips; i++)
++			xp->pr_ips[i] = pr->pr_ips[i].pi_ip;
++		xp->pr_nips = pr->pr_nips;
+ 		mtx_unlock(&pr->pr_mtx);
++		qsort(xp->pr_ips, xp->pr_nips, sizeof(xp->pr_ips[0]), qcmp);
+ 		xp++;
+ 	}
+ 	mtx_unlock(&allprison_mtx);
+--- /usr/src/sys/netinet/in_pcb.h	Fri Jan  5 20:31:20 2007
++++ sys/netinet/in_pcb.h	Fri Jan  5 19:12:10 2007
+@@ -339,6 +339,8 @@
+ extern int	ipport_hilastauto;
+ extern struct callout ipport_tick_callout;
+ 
++struct ucred;
++
+ void	in_pcbpurgeif0(struct inpcbinfo *, struct ifnet *);
+ int	in_pcballoc(struct socket *, struct inpcbinfo *, const char *);
+ int	in_pcbbind(struct inpcb *, struct sockaddr *, struct ucred *);
+@@ -352,7 +354,7 @@
+ void	in_pcbdisconnect(struct inpcb *);
+ int	in_pcbinshash(struct inpcb *);
+ struct inpcb *
+-	in_pcblookup_local(struct inpcbinfo *,
++	in_pcblookup_local(struct ucred *, struct inpcbinfo *,
+ 	    struct in_addr, u_int, int);
+ struct inpcb *
+ 	in_pcblookup_hash(struct inpcbinfo *, struct in_addr, u_int,
+--- /usr/src/sys/netinet/raw_ip.c	Fri Jan  5 20:31:20 2007
++++ sys/netinet/raw_ip.c	Fri Jan  5 19:12:10 2007
+@@ -224,10 +224,10 @@
+ 		if (inp->inp_faddr.s_addr &&
+ 		    inp->inp_faddr.s_addr != ip->ip_src.s_addr)
+ 			goto docontinue;
+-		if (jailed(inp->inp_socket->so_cred))
+-			if (htonl(prison_getip(inp->inp_socket->so_cred)) !=
+-			    ip->ip_dst.s_addr)
+-				goto docontinue;
++		if (!jailed_ip(inp->inp_socket->so_cred,
++		    ntohl(ip->ip_dst.s_addr))) {
++			goto docontinue;
++		}
+ 		if (last) {
+ 			struct mbuf *n;
+ 
+@@ -300,13 +300,11 @@
+ 		}
+ 		INP_LOCK(inp);
+ 		ip = mtod(m, struct ip *);
+-		if (jailed(inp->inp_socket->so_cred)) {
+-			if (ip->ip_src.s_addr !=
+-			    htonl(prison_getip(inp->inp_socket->so_cred))) {
+-				INP_UNLOCK(inp);
+-				m_freem(m);
+-				return (EPERM);
+-			}
++		if (!jailed_ip(inp->inp_socket->so_cred,
++		    ntohl(ip->ip_src.s_addr))) {
++			INP_UNLOCK(inp);
++			m_freem(m);
++			return (EPERM);
+ 		}
+ 		/* don't allow both user specified and setsockopt options,
+ 		   and don't allow packet length sizes that will crash */
+@@ -700,13 +698,8 @@
+ 	if (nam->sa_len != sizeof(*addr))
+ 		return EINVAL;
+ 
+-	if (jailed(td->td_ucred)) {
+-		if (addr->sin_addr.s_addr == INADDR_ANY)
+-			addr->sin_addr.s_addr =
+-			    htonl(prison_getip(td->td_ucred));
+-		if (htonl(prison_getip(td->td_ucred)) != addr->sin_addr.s_addr)
+-			return (EADDRNOTAVAIL);
+-	}
++	if (!jailed_ip(td->td_ucred, ntohl(addr->sin_addr.s_addr)))
++		return (EADDRNOTAVAIL);
+ 
+ 	if (TAILQ_EMPTY(&ifnet) ||
+ 	    (addr->sin_family != AF_INET && addr->sin_family != AF_IMPLINK) ||
+--- /usr/src/sys/netinet/in_pcb.c	Fri Jan  5 20:31:20 2007
++++ sys/netinet/in_pcb.c	Fri Jan  5 20:40:04 2007
+@@ -268,7 +268,7 @@
+ 	struct in_addr laddr;
+ 	u_short lport = 0;
+ 	int wild = 0, reuseport = (so->so_options & SO_REUSEPORT);
+-	int error, prison = 0;
++	int error;
+ 	int dorandom;
+ 
+ 	INP_INFO_WLOCK_ASSERT(pcbinfo);
+@@ -293,9 +293,8 @@
+ 		if (sin->sin_family != AF_INET)
+ 			return (EAFNOSUPPORT);
+ #endif
+-		if (sin->sin_addr.s_addr != INADDR_ANY)
+-			if (prison_ip(cred, 0, &sin->sin_addr.s_addr))
+-				return(EINVAL);
++		if (prison_ip(cred, 0, &sin->sin_addr.s_addr))
++			return (EINVAL);
+ 		if (sin->sin_port != *lportp) {
+ 			/* Don't allow the port to change. */
+ 			if (*lportp != 0)
+@@ -327,13 +326,10 @@
+ 			    ntohs(lport) >= ipport_reservedlow &&
+ 			    suser_cred(cred, SUSER_ALLOWJAIL))
+ 				return (EACCES);
+-			if (jailed(cred))
+-				prison = 1;
+ 			if (!IN_MULTICAST(ntohl(sin->sin_addr.s_addr)) &&
+ 			    suser_cred(so->so_cred, SUSER_ALLOWJAIL) != 0) {
+-				t = in_pcblookup_local(inp->inp_pcbinfo,
+-				    sin->sin_addr, lport,
+-				    prison ? 0 :  INPLOOKUP_WILDCARD);
++				t = in_pcblookup_local(cred, inp->inp_pcbinfo,
++				    sin->sin_addr, lport, INPLOOKUP_WILDCARD);
+ 	/*
+ 	 * XXX
+ 	 * This entire block sorely needs a rewrite.
+@@ -350,10 +346,10 @@
+ 				     t->inp_socket->so_cred->cr_uid))
+ 					return (EADDRINUSE);
+ 			}
+-			if (prison && prison_ip(cred, 0, &sin->sin_addr.s_addr))
++			if (prison_ip(cred, 0, &sin->sin_addr.s_addr))
+ 				return (EADDRNOTAVAIL);
+-			t = in_pcblookup_local(pcbinfo, sin->sin_addr,
+-			    lport, prison ? 0 : wild);
++			t = in_pcblookup_local(cred, pcbinfo, sin->sin_addr,
++			    lport, wild);
+ 			if (t && (t->inp_vflag & INP_TIMEWAIT)) {
+ 				if ((reuseport & intotw(t)->tw_so_options) == 0)
+ 					return (EADDRINUSE);
+@@ -378,10 +374,8 @@
+ 		u_short first, last;
+ 		int count;
+ 
+-		if (laddr.s_addr != INADDR_ANY)
+-			if (prison_ip(cred, 0, &laddr.s_addr))
+-				return (EINVAL);
+-
++		if (prison_ip(cred, 0, &laddr.s_addr))
++			return (EINVAL);
+ 		if (inp->inp_flags & INP_HIGHPORT) {
+ 			first = ipport_hifirstauto;	/* sysctl */
+ 			last  = ipport_hilastauto;
+@@ -440,7 +434,7 @@
+ 				if (*lastport > first || *lastport < last)
+ 					*lastport = first;
+ 				lport = htons(*lastport);
+-			} while (in_pcblookup_local(pcbinfo, laddr, lport,
++			} while (in_pcblookup_local(cred, pcbinfo, laddr, lport,
+ 			    wild));
+ 		} else {
+ 			/*
+@@ -458,7 +452,7 @@
+ 				if (*lastport < first || *lastport > last)
+ 					*lastport = first;
+ 				lport = htons(*lastport);
+-			} while (in_pcblookup_local(pcbinfo, laddr, lport,
++			} while (in_pcblookup_local(cred, pcbinfo, laddr, lport,
+ 			    wild));
+ 		}
+ 	}
+@@ -569,6 +563,7 @@
+ 		sa.sin_addr.s_addr = htonl(prison_getip(socred));
+ 		sa.sin_len = sizeof(sa);
+ 		sa.sin_family = AF_INET;
++		sa.sin_port = lport;
+ 		error = in_pcbbind_setup(inp, (struct sockaddr *)&sa,
+ 		    &laddr.s_addr, &lport, cred);
+ 		if (error)
+@@ -582,15 +577,22 @@
+ 		 * and the primary interface supports broadcast,
+ 		 * choose the broadcast address for that interface.
+ 		 */
+-		if (faddr.s_addr == INADDR_ANY)
+-			faddr = IA_SIN(TAILQ_FIRST(&in_ifaddrhead))->sin_addr;
+-		else if (faddr.s_addr == (u_long)INADDR_BROADCAST &&
++		if (faddr.s_addr == INADDR_ANY) {
++			if (cred != NULL && jailed(cred))
++				faddr.s_addr = htonl(prison_getip(cred));
++			else
++				faddr = IA_SIN(TAILQ_FIRST(&in_ifaddrhead))->sin_addr;
++		} else if (faddr.s_addr == (u_long)INADDR_BROADCAST &&
+ 		    (TAILQ_FIRST(&in_ifaddrhead)->ia_ifp->if_flags &
+ 		    IFF_BROADCAST))
+ 			faddr = satosin(&TAILQ_FIRST(
+ 			    &in_ifaddrhead)->ia_broadaddr)->sin_addr;
+ 	}
+ 	if (laddr.s_addr == INADDR_ANY) {
++		if (cred != NULL && jailed(cred))
++			laddr.s_addr = htonl(cred->cr_prison->pr_ips[0].pi_ip);
++	}
++	if (laddr.s_addr == INADDR_ANY) {
+ 		struct route sro;
+ 
+ 		bzero(&sro, sizeof(sro));
+@@ -865,8 +867,7 @@
+  */
+ #define INP_LOOKUP_MAPPED_PCB_COST	3
+ struct inpcb *
+-in_pcblookup_local(struct inpcbinfo *pcbinfo, struct in_addr laddr,
+-    u_int lport_arg, int wild_okay)
++in_pcblookup_local(struct ucred *cred, struct inpcbinfo *pcbinfo, struct in_addr laddr, u_int lport_arg, int wild_okay)
+ {
+ 	struct inpcb *inp;
+ #ifdef INET6
+@@ -895,9 +896,15 @@
+ 			    inp->inp_laddr.s_addr == laddr.s_addr &&
+ 			    inp->inp_lport == lport) {
+ 				/*
+-				 * Found.
++				 * Found?
+ 				 */
+-				return (inp);
++				/* Those values could be NULL, really. */
++				if (inp->inp_socket == NULL || cred == NULL)
++					return (inp);
++				if (inp->inp_socket->so_cred->cr_prison ==
++				    cred->cr_prison) {
++					return (inp);
++				}
+ 			}
+ 		}
+ 		/*
+@@ -946,6 +953,11 @@
+ 				if ((inp->inp_vflag & INP_IPV6) != 0)
+ 					wildcard += INP_LOOKUP_MAPPED_PCB_COST;
+ #endif
++                if (cred != NULL && inp->inp_socket != NULL &&
++                    inp->inp_socket->so_cred->cr_prison !=
++                    cred->cr_prison) {
++                        continue;
++                }
+ 				if (inp->inp_faddr.s_addr != INADDR_ANY)
+ 					wildcard++;
+ 				if (inp->inp_laddr.s_addr != INADDR_ANY) {
+@@ -980,7 +992,7 @@
+     struct ifnet *ifp)
+ {
+ 	struct inpcbhead *head;
+-	struct inpcb *inp;
++	struct inpcb *inp, *tmpinp = NULL;
+ 	u_short fport = fport_arg, lport = lport_arg;
+ 
+ 	INP_INFO_RLOCK_ASSERT(pcbinfo);
+@@ -998,46 +1010,133 @@
+ 		    inp->inp_fport == fport &&
+ 		    inp->inp_lport == lport) {
+ 			/*
+-			 * Found.
++			 * Found?
+ 			 */
+-			return (inp);
++			if (inp->inp_socket == NULL ||
++			    !jailed(inp->inp_socket->so_cred)) {
++				if (!jail_jailed_sockets_first)
++					return (inp);
++				else if (tmpinp == NULL)
++					tmpinp = inp;
++			} else {
++				if (jail_jailed_sockets_first)
++					return (inp);
++				else if (tmpinp == NULL)
++					tmpinp = inp;
++			}
+ 		}
+ 	}
++	if (tmpinp != NULL)
++		return (tmpinp);
+ 	if (wildcard) {
+-		struct inpcb *local_wild = NULL;
++		struct inpcb *local_exact = NULL, *local_wild = NULL;
+ #if defined(INET6)
+ 		struct inpcb *local_wild_mapped = NULL;
+ #endif /* defined(INET6) */
+-
++		struct inpcb *jail_exact = NULL, *jail_wild = NULL;
++		struct ucred *cred;
++		int injail;
++
++		/*
++		 * Order of socket selection:
++		 * if (jail_jailed_sockets_first) {
++		 * 	1. jailed, non-wild.
++		 * 	2. jailed, wild.
++		 * 	3. non-jailed, non-wild.
++		 * 	4. non-jailed, wild.
++		 * } else {
++		 * 	1. non-jailed, non-wild.
++		 * 	2. non-jailed, wild.
++		 * 	3. jailed, non-wild.
++		 * 	4. jailed, wild.
++		 * }
++		 */
+ 		head = &pcbinfo->hashbase[INP_PCBHASH(INADDR_ANY, lport, 0, pcbinfo->hashmask)];
+ 		LIST_FOREACH(inp, head, inp_hash) {
+ #ifdef INET6
+ 			if ((inp->inp_vflag & INP_IPV4) == 0)
+ 				continue;
+ #endif
+-			if (inp->inp_faddr.s_addr == INADDR_ANY &&
+-			    inp->inp_lport == lport) {
+-				if (ifp && ifp->if_type == IFT_FAITH &&
+-				    (inp->inp_flags & INP_FAITH) == 0)
++			if (inp->inp_faddr.s_addr != INADDR_ANY ||
++			    inp->inp_lport != lport)
++				continue;
++			if (ifp && ifp->if_type == IFT_FAITH &&
++			    (inp->inp_flags & INP_FAITH) == 0)
++				continue;
++
++			if (inp->inp_socket == NULL) {
++				cred = NULL;
++				injail = 0;
++			} else {
++				cred = inp->inp_socket->so_cred;
++				injail = jailed(cred);
++			}
++			if (injail) {
++				if (jail_exact != NULL) {
++					KASSERT(!jail_jailed_sockets_first,
++					    ("we should returned earlier"));
+ 					continue;
+-				if (inp->inp_laddr.s_addr == laddr.s_addr)
+-					return (inp);
+-				else if (inp->inp_laddr.s_addr == INADDR_ANY) {
+-#if defined(INET6)
+-					if (INP_CHECK_SOCKAF(inp->inp_socket,
+-							     AF_INET6))
+-						local_wild_mapped = inp;
++				}
++				if (!jailed_ip(cred,
++				    ntohl(laddr.s_addr))) {
++					continue;
++				}
++			} else {
++				if (local_exact != NULL) {
++					KASSERT(jail_jailed_sockets_first,
++					    ("we should returned earlier"));
++					continue;
++				}
++			}
++			if (inp->inp_laddr.s_addr == laddr.s_addr) {
++				if (injail) {
++					if (jail_jailed_sockets_first)
++						return (inp);
++					else
++						jail_exact = inp;
++				} else {
++					if (!jail_jailed_sockets_first)
++						return (inp);
+ 					else
++						local_exact = inp;
++				}
++			} else if (inp->inp_laddr.s_addr == INADDR_ANY) {
++#if defined(INET6)
++				if (INP_CHECK_SOCKAF(inp->inp_socket, AF_INET6))
++					local_wild_mapped = inp;
++				else
+ #endif /* defined(INET6) */
++				if (injail)
++					jail_wild = inp;
++				else
+ 					local_wild = inp;
+-				}
+ 			}
+ 		}
++		if (jail_jailed_sockets_first) {
++			KASSERT(jail_exact == NULL, ("jail_exact != NULL"));
++			if (jail_wild != NULL)
++				return (jail_wild);
++			if (local_exact != NULL)
++				return (local_exact);
++			if (local_wild != NULL)
++				return (local_wild);
+ #if defined(INET6)
+-		if (local_wild == NULL)
+-			return (local_wild_mapped);
++			if (local_wild_mapped != NULL)
++				return (local_wild_mapped);
+ #endif /* defined(INET6) */
+-		return (local_wild);
++		} else {
++			KASSERT(local_exact == NULL, ("local_exact != NULL"));
++			if (local_wild != NULL)
++				return (local_wild);
++#if defined(INET6)
++			if (local_wild_mapped != NULL)
++				return (local_wild_mapped);
++#endif /* defined(INET6) */
++			if (jail_exact != NULL)
++				return (jail_exact);
++			if (jail_wild != NULL)
++				return (jail_wild);
++		}
+ 	}
+ 
+ 	/*
+--- /usr/src/sys/netinet6/in6_pcb.c	Fri Jan  5 20:31:20 2007
++++ sys/netinet6/in6_pcb.c	Fri Jan  5 19:12:10 2007
+@@ -212,9 +212,9 @@
+ 					struct sockaddr_in sin;
+ 
+ 					in6_sin6_2_sin(&sin, sin6);
+-					t = in_pcblookup_local(pcbinfo,
+-						sin.sin_addr, lport,
+-						INPLOOKUP_WILDCARD);
++					t = in_pcblookup_local(cred, pcbinfo,
++					    sin.sin_addr, lport,
++					    INPLOOKUP_WILDCARD);
+ 					if (t &&
+ 					    ((t->inp_vflag &
+ 					      INP_TIMEWAIT) == 0) &&
+@@ -237,8 +237,8 @@
+ 				struct sockaddr_in sin;
+ 
+ 				in6_sin6_2_sin(&sin, sin6);
+-				t = in_pcblookup_local(pcbinfo, sin.sin_addr,
+-						       lport, wild);
++				t = in_pcblookup_local(cred, pcbinfo,
++				    sin.sin_addr, lport, wild);
+ 				if (t && t->inp_vflag & INP_TIMEWAIT) {
+ 					if ((reuseport & 
+ 					    intotw(t)->tw_so_options) == 0 &&
+--- /usr/src/sys/sys/jail.h	Fri Jan  5 20:31:20 2007
++++ sys/sys/jail.h	Fri Jan  5 19:12:10 2007
+@@ -6,7 +6,7 @@
+  * this stuff is worth it, you can buy me a beer in return.   Poul-Henning Kamp
+  * ----------------------------------------------------------------------------
+  *
+- * $FreeBSD: src/sys/sys/jail.h,v 1.26 2005/06/09 18:49:19 pjd Exp $
++ * $FreeBSD: /repoman/r/ncvs/src/sys/sys/jail.h,v 1.26 2005/06/09 18:49:19 pjd Exp $
+  *
+  */
+ 
+@@ -17,17 +17,21 @@
+ 	u_int32_t	version;
+ 	char		*path;
+ 	char		*hostname;
+-	u_int32_t	ip_number;
++	u_int32_t	*ips;
++	u_int		nips;
+ };
+ 
++#define	JAIL_MAX_IPS	256
++
+ struct xprison {
+-	int		 pr_version;
+-	int		 pr_id;
+-	char		 pr_path[MAXPATHLEN];
+-	char 		 pr_host[MAXHOSTNAMELEN];
+-	u_int32_t	 pr_ip;
++	int		pr_version;
++	int		pr_id;
++	char		pr_path[MAXPATHLEN];
++	char		pr_host[MAXHOSTNAMELEN];
++	u_int32_t	pr_ips[JAIL_MAX_IPS];
++	u_int		pr_nips;
+ };
+-#define	XPRISON_VERSION	1
++#define	XPRISON_VERSION	2
+ 
+ #ifndef _KERNEL
+ 
+@@ -48,6 +52,12 @@
+ #endif
+ #endif /* _KERNEL */
+ 
++struct prip {
++	u_int32_t	 pi_ip;
++	struct prip	*pi_left;
++	struct prip	*pi_right;
++};
++
+ /*
+  * This structure describes a prison.  It is pointed to by all struct
+  * ucreds's of the inmates.  pr_ref keeps track of them and is used to
+@@ -68,11 +78,12 @@
+ 	char		 pr_path[MAXPATHLEN];		/* (c) chroot path */
+ 	struct vnode	*pr_root;			/* (c) vnode to rdir */
+ 	char 		 pr_host[MAXHOSTNAMELEN];	/* (p) jail hostname */
+-	u_int32_t	 pr_ip;				/* (c) ip addr host */
+ 	void		*pr_linux;			/* (p) linux abi */
+ 	int		 pr_securelevel;		/* (p) securelevel */
+ 	struct task	 pr_task;			/* (d) destroy task */
+ 	struct mtx	 pr_mtx;
++	u_int		 pr_nips;			/* (c) number of ips */
++	struct prip	 pr_ips[];			/* (c) jail's IPs */
+ };
+ #endif /* _KERNEL || _WANT_PRISON */
+ 
+@@ -88,6 +99,7 @@
+ extern int	jail_getfsstat_jailrootonly;
+ extern int	jail_allow_raw_sockets;
+ extern int	jail_chflags_allowed;
++extern int	jail_jailed_sockets_first;
+ 
+ LIST_HEAD(prisonlist, prison);
+ extern struct	prisonlist allprison;
+@@ -111,6 +123,7 @@
+ int prison_if(struct ucred *cred, struct sockaddr *sa);
+ int prison_ip(struct ucred *cred, int flag, u_int32_t *ip);
+ void prison_remote_ip(struct ucred *cred, int flags, u_int32_t *ip);
++int jailed_ip(struct ucred *cred, u_int32_t ip);
+ 
+ #endif /* _KERNEL */
+ #endif /* !_SYS_JAIL_H_ */
