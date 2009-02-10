@@ -1,0 +1,6 @@
+# The zfs filesystem that will be backed up
+my_zfs='tank/home/joe'
+# The zpool holding the backup
+my_backuppool='backup'
+
+# This will create a backup of the filesystem tank/home/joe into the filesystem backup/tank/home/joe
