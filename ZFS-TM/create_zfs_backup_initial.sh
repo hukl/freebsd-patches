@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright Philipp Wuensche
 
 my_zfs='home/joe'
 my_pool='tank'

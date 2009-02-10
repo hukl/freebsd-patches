@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright Philipp Wuensche
 
 usage='Usage: zfs-tm -f <configfile>'
 
