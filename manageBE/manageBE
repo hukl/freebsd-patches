@@ -1,0 +1,166 @@
+#!/bin/sh
+
+# manageBE [activate|create|delete|list] {params}
+
+type=$1
+
+mgm="manageBE"
+usage_activate="Usage: ${mgm} activate -n <BE> -p <pool>"
+usage_create="Usage: ${mgm} create -n <newBE> -s <sourceBE> -p <pool>"
+usage_delete="Usage: ${mgm} delete -n <BE> -p <pool> -o [yes|no]"
+usage_upgrade="Usage: ${mgm} upgrade -n <BE> -p <pool> {KERNCONF=GENERIC}"
+
+error_delete="If filesystem has dependent clones, please promote them via 'zfs promote <filesystem>' and re-run ${mgm} delete"
+
+# define our bail out shortcut
+exerr () { echo -e "$*" >&2 ; exit 1; }
+
+case ${type} in
+    activate)
+        # activate a boot-environment
+        
+        shift; while getopts :n:p: arg; do case ${arg} in
+            n) new_bootfs=${OPTARG};;
+            p) pool=${OPTARG};;
+            ?) exerr ${usage_activate};;
+        esac; done; shift $(( ${OPTIND} - 1 ))
+        
+        [ "${new_bootfs}" -a "${pool}" ] || exerr ${usage_activate}
+
+        zpool set bootfs=${pool}/ROOT/${new_bootfs} ${pool}
+    ;;
+    create)
+        # create a boot-environment
+        
+        shift; while getopts :n:s:p: arg; do case ${arg} in
+            n) new_bootfs=${OPTARG};;
+            s) current_bootfs=${OPTARG};;
+            p) pool=${OPTARG};;
+            ?) exerr ${usage_create};;
+        esac; done; shift $(( ${OPTIND} - 1 ))
+        
+        [ "${new_bootfs}" -a "${pool}" -a "${current_bootfs}" ] || exerr ${usage_create}
+        
+        #current_bootfs=`zpool list -H -o bootfs ${pool}`
+        
+        zfs snapshot ${pool}/ROOT/${current_bootfs}@${new_bootfs}
+        zfs clone ${pool}/ROOT/${current_bootfs}@${new_bootfs} ${pool}/ROOT/${new_bootfs}
+        grep -v '^vfs.root.mountfrom' /boot/loader.conf > /${pool}/ROOT/${new_bootfs}/boot/loader.conf
+        echo vfs.root.mountfrom=\"zfs:${pool}/ROOT/${new_bootfs}\" >> /${pool}/ROOT/${new_bootfs}/boot/loader.conf
+        echo "Install new kernel with option 'DESTDIR=/${pool}/ROOT/${new_bootfs}/' and run '${mgm} activate -n ${new_bootfs} -p ${pool}"
+    ;;
+    delete)
+        # delete a boot-environment
+        
+        shift; while getopts :n:p:o: arg; do case ${arg} in
+            n) delete_bootfs=${OPTARG};;
+            p) pool=${OPTARG};;
+            o) delete_origin=${OPTARG};;
+            ?) exerr ${usage_delete};;
+        esac; done; shift $(( ${OPTIND} - 1 ))
+        
+        [ "${delete_bootfs}" -a "${pool}" -a "${delete_origin}" ] || exerr ${usage_delete}
+        
+        current_bootfs=`zpool list -H -o bootfs ${pool}`
+        
+        if [ ! "${pool}/ROOT/${delete_bootfs}" = "${current_bootfs}" ]; then
+            if [ "${delete_origin}" = "yes" ]; then
+               origin=`zfs list -H -o origin ${pool}/ROOT/${delete_bootfs}`
+            fi
+            zfs destroy -r ${pool}/ROOT/${delete_bootfs} || exerr ${error_delete}
+            if [ "${delete_origin}" = "yes" -a "${origin}" ]; then
+                zfs destroy ${origin}
+            fi
+        else
+            echo "${delete_bootfs} is ZFS bootfs, unable to delete!"
+        fi
+    ;;
+    list)
+        shift; while getopts :v: arg; do
+            verbose="YES";
+        done; shift $(( ${OPTIND} - 1 ))
+
+	rootfs=`mount | head -n1 | grep 'on / ' |cut -d ' ' -f1`
+	for pool in `zpool list -H -o name`; do
+		echo "Poolname: $pool"
+		bootfs=`zpool list -H -o bootfs $pool`
+
+		if [ "$bootfs" = "-" ]; then
+			echo "No BE setup"
+			echo
+			continue
+		fi
+
+		mountpoint_length=`zfs list -H -o mountpoint -r $pool/ROOT | tail +2 |wc -L`
+		if [ "$mountpoint_length" -lt "10" ]; then
+			mountpoint_length=10
+		fi
+		name_length=`zfs list -H -o name -r $pool/ROOT | tail +2 | sed s:^$pool/ROOT/:: |wc -L`
+		if [ "$name_length" -lt "4" ]; then
+			name_length=4
+		fi
+		space_length=`zfs list -H -o used -r $pool/ROOT | tail +2 |wc -L`
+		if [ "$space_length" -lt "5" ]; then
+			space_length=5
+		fi
+		snapshot_length=`zfs list -t snapshot -H -o name -r $pool/ROOT | sed s:^$pool/ROOT/::  | wc -L`
+
+		printf "%-${name_length}s %-6s %-6s %-${mountpoint_length}s %-${space_length}s\\n" BE Active Active Mountpoint Space
+		printf "%-${name_length}s %-6s %-6s %-${mountpoint_length}s %-${space_length}s\\n" Name Now Reboot - Used
+		printf "%-${name_length}s %-6s %-6s %-${mountpoint_length}s %-${space_length}s\\n" ---- ------ ------ ---------- -----
+
+		for be_mountpoint in `zfs list -H -o name -r $pool/ROOT |tail +2`; do
+
+			be_name=`echo ${be_mountpoint}|sed s:^$pool/ROOT/::`
+
+			be_active='no'	
+			if [ "${be_mountpoint}" = "${rootfs}" ]; then
+			 	be_active='yes'	
+			fi
+			be_nextboot='no'
+			if [ "${be_mountpoint}" = "${bootfs}" ]; then
+			 	be_nextboot='yes'	
+			fi
+
+			be_mountpoint="/${be_mountpoint}"
+	
+			be_space=`zfs list -H -o used $be_mountpoint`
+	
+
+			printf "%-${name_length}s %-6s %-6s %-${mountpoint_length}s %${space_length}s\\n" $be_name $be_active $be_nextboot $be_mountpoint $be_space
+
+			if [ "$verbose" = "YES" ]; then
+			be_created=`zfs list -H -o creation $be_mountpoint`
+			echo
+			printf "\t%-${snapshot_length}s %-21s\\n" Name Created
+			printf "\t%-${snapshot_length}s %-21s\\n" $be_name "$be_created"
+			for snapshot_name in `zfs list -t snapshot -H -r -o name $pool/ROOT/$be_name|sed s:^$pool/ROOT/::`; do
+				snapshot_created=`zfs list -t snapshot -H -o creation $pool/ROOT/$snapshot_name`
+				printf "\t%-${snapshot_length}s %-21s\\n" $snapshot_name "$snapshot_created"
+			done
+			echo
+			fi
+		done
+		echo
+	done
+    ;;
+    upgrade)
+        # upgrade a boot-environment
+        
+        shift; while getopts :n:p: arg; do case ${arg} in
+            n) upgrade_bootfs=${OPTARG};;
+            p) pool=${OPTARG};;
+            ?) exerr ${usage_upgrade};;
+        esac; done; shift $(( ${OPTIND} - 1 ))
+        
+        [ "${upgrade_bootfs}" -a "${pool}" ] || exerr ${usage_upgrade}
+
+        export DESTDIR="/${pool}/ROOT/${upgrade_bootfs}/"
+        echo "make -s installkernel DESTDIR=${DESTDIR} $1"
+        echo "make -s installworld DESTDIR=${DESTDIR}"
+	echo "mergemaster -U -D ${DESTDIR}"
+    ;;
+    *)
+        echo echo "Usage: ${mgm} [activate|create|delete|list] {params}"
+    ;;
+esac
