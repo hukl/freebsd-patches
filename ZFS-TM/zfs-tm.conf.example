@@ -2,5 +2,7 @@
 my_zfs='tank/home/joe'
 # The zpool holding the backup
 my_backuppool='backup'
+# The user running the zfs-tm tool, if you set anything else than root you need to use ZFS permission delegation
+my_zfstm_user='root'
 
 # This will create a backup of the filesystem tank/home/joe into the filesystem backup/tank/home/joe

@@ -5,7 +5,7 @@
 
 date=`date -v -0d "+%Y%m%d%H%M%S"`
 
-usage='Usage: zfs-tm -f <configfile>'
+usage='Usage: zfs-tm-localsnapshot -f <configfile>'
 
 while getopts :f: arg; do
  case ${arg} in
@@ -17,6 +17,12 @@ done
 [ -f "${zfs_tm_conf}" ] && . "${zfs_tm_conf}"
 [ "${zfs_tm_conf}" = "" ] && echo $usage && exit
 [ "${my_zfs}" = "" ] && echo $usage && exit
+[ "${my_zfstm_user}" = "" ] && echo $usage && exit
+
+if [ ! "$my_zfstm_user" = `id -nu` ]; then
+   echo "ERROR: Not running as the right backup user"
+   exit
+fi
 
 zfs_name=`zfs list -H -o name ${my_zfs} 2> /dev/null`
 

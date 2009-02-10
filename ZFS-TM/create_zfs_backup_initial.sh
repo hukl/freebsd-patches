@@ -1,14 +1,36 @@
 #!/bin/sh
 # Copyright Philipp Wuensche
 
-my_zfs='home/joe'
-my_pool='tank'
-my_backuppool='backup'
+usage='Usage: zfs-tm -f <configfile>'
 
-last_snapshot=`zfs list -H -o name -t snapshot -r $my_pool/$my_zfs|tail -n1`
+while getopts :f: arg; do
+ case ${arg} in
+  f) zfs_tm_conf=$OPTARG;;
+  *) echo $usage && exit
+ esac
+done
 
-echo "zfs create $my_backuppool/$my_pool"
-echo "zfs send -R $last_snapshot  |zfs recv -d $my_backuppool/$my_pool"
-echo "zfs clone $my_backuppool/$last_snapshot $my_backuppool/$my_pool/${my_zfs}_backupmark"
-echo "zfs set readonly=on $my_backuppool/$my_pool"
-echo "zfs allow -u joe send,receive,snapshot,create,rename,destroy,clone,rollback,mount $my_pool/$my_zfs"
+[ -f "${zfs_tm_conf}" ] && . "${zfs_tm_conf}"
+[ "${zfs_tm_conf}" = "" ] && echo $usage && exit
+[ "${my_zfs}" = "" ] && echo $usage && exit
+[ "${my_backuppool}" = "" ] && echo $usage && exit
+
+if [ ! "root" = `id -nu` ]; then
+   echo "ERROR: Script has to run as root"
+   exit
+fi
+
+my_localpool=${my_zfs%%/*}
+
+last_snapshot=`zfs list -H -o name -t snapshot -r $my_zfs|tail -n1`
+
+echo "zfs create -p $my_backuppool/$my_localpool"
+echo "zfs send -R $last_snapshot  |zfs recv -dF $my_backuppool/$my_localpool"
+echo "zfs create -p -o canmount=off $my_backuppool/.backupmark/${my_zfs}"
+echo "zfs clone $my_backuppool/$last_snapshot $my_backuppool/.backupmark/${my_zfs}/latest"
+echo "zfs set readonly=on $my_backuppool/$my_zfs"
+echo "### Using ZFS delegation for zfs-tm ###"
+echo "WARNING: This needs vfs.usermount=1"
+echo "zfs allow -u $my_zfstm_user send,receive,snapshot,create,rename,destroy,clone,rollback,mount $my_zfs"
+echo "zfs allow -u $my_zfstm_user send,receive,snapshot,create,rename,destroy,clone,rollback,mount $my_backuppool/$my_zfs"
+echo "zfs allow -u $my_zfstm_user send,receive,snapshot,create,rename,destroy,clone,rollback,mount $my_backuppool/.backupmark/$my_zfs"
