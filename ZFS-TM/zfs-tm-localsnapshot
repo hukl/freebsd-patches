@@ -43,7 +43,7 @@ cleanup_snapshots () {
 if [ "$zfs_name" = "$my_zfs" ]; then
   /sbin/zfs snapshot -r ${my_zfs}@${date}
 
-  if [ "${local_snapshotsize_limit}" ]; then
+  if [ "${local_usedbysnapshots_limit}" ]; then
     cleanup_snapshots
   fi
 fi
