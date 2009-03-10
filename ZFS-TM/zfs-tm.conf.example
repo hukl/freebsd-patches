@@ -6,3 +6,12 @@ my_backuppool='backup'
 my_zfstm_user='root'
 
 # This will create a backup of the filesystem tank/home/joe into the filesystem backup/tank/home/joe
+
+# limits (k,M,G are usable)
+# this limit is the maximum size the backup should occupy on the backup zpool, this limit has to be fulfilled first
+# if not set it will be set to the maximal space available on the backup zpool
+backup_datasize_limit=''
+# the maximum amount of data all snapshots should occupy on the backup zpool, this is not needed really but nice to have
+backup_snapshotsize_limit='1G'
+# if you don't want to fill all your space with snapshots, this limit keeps the amount of data used by snapshots within the limit
+local_snapshotsize_limit='1G'
