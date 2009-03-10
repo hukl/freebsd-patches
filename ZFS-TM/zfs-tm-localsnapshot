@@ -26,17 +26,17 @@ fi
 
 zfs_name=`/sbin/zfs list -H -o name ${my_zfs} 2> /dev/null`
 
-calc_snapshot_bytesize () {
-  current_snapshotsize=`/sbin/zfs list -H -o usedbysnapshots ${my_zfs}|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
+calc_usedbysnapshots_bytesize () {
+  usedbysnapshots_bytesize=`/sbin/zfs list -H -o usedbysnapshots ${my_zfs}|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
 }
 
 cleanup_snapshots () {
-  _local_snapshotsize_limit=`echo "${local_snapshotsize_limit}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
-  calc_snapshot_bytesize
-  while [ "$current_snapshotsize" -gt "$_local_snapshotsize_limit" ]; do
+  _local_usedbysnapshots_limit=`echo "${local_usedbysnapshots_limit}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
+  calc_usedbysnapshots_bytesize
+  while [ "$usedbysnapshots_bytesize" -gt "$_local_usedbysnapshots_limit" ]; do
     _delete=`/sbin/zfs list -H -o name -t snapshot -r ${my_zfs} | grep ${my_zfs}'@' | head -n1`
     /sbin/zfs destroy ${_delete}
-    calc_bytesize
+    calc_usedbysnapshots_bytesize
   done
 }
 
