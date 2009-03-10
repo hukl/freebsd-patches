@@ -29,17 +29,35 @@ if [ ! `zpool list -H -o name|grep $my_backuppool` ]; then
    exit
 fi
 
-calc_snapshot_bytesize () {
-  current_snapshotsize=`/sbin/zfs list -H -o used ${my_backuppool}/${my_zfs} |tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
+calc_usedbysnapshots_bytesize () {
+  usedbysnapshots_bytesize=`/sbin/zfs list -H -o usedbysnapshots ${my_backuppool}/${my_zfs} |tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
 }
 
-cleanup_snapshots () {
-  _backup_snapshotsize_limit=`echo "${backup_snapshotsize_limit}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
-  calc_snapshot_bytesize
-  while [ "$current_snapshotsize" -gt "$_backup_snapshotsize_limit" ]; do
+calc_used_bytesize () {
+  used_bytesize=`/sbin/zfs list -H -o used ${my_backuppool}/${my_zfs} |tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
+}
+
+cleanup_snapshots_usedbysnapshots_limit () {
+  [ "${backup_usedbysnapshots_limit}" = "" ] && return
+  _backup_usedbysnapshots_limit=`echo "${backup_usedbysnapshots_limit}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
+  calc_usedbysnapshots_bytesize
+#  echo "Backup Snapshot Limit is: ${_backup_usedbysnapshots_limit} bytes, current use is ${usedbysnapshots_bytesize} bytes."
+  while [ "$usedbysnapshots_bytesize" -gt "$_backup_usedbysnapshots_limit" ]; do
     _delete=`/sbin/zfs list -H -o name -t snapshot -r ${my_backuppool}/${my_zfs} | grep ${my_backuppool}/${my_zfs}'@' | head -n1`
     /sbin/zfs destroy ${_delete}
-    calc_bytesize
+    calc_usedbysnapshots_bytesize
+  done
+}
+
+cleanup_snapshots_used_limit () {
+  [ "${backup_used_limit}" = "" ] && backup_used_limit=`/sbin/zfs list -H -o available ${my_backuppool}/${my_zfs}`
+  _backup_used_limit=`echo "${backup_used_limit}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
+  calc_used_bytesize
+#  echo "Backup Total Limit is: ${_backup_used_limit} bytes, current use is ${used_bytesize} bytes."
+  while [ "$used_bytesize" -gt "$_backup_used_limit" ]; do
+    _delete=`/sbin/zfs list -H -o name -t snapshot -r ${my_backuppool}/${my_zfs} | grep ${my_backuppool}/${my_zfs}'@' | head -n1`
+    /sbin/zfs destroy ${_delete}
+    calc_used_bytesize
   done
 }
 
@@ -59,6 +77,10 @@ echo -n "Copying incremental backup from ${my_zfs}@$latest_snapshot_backup till 
 # make sure the backup is where we left it and noone has edited any data
 zfs rollback $my_backuppool/${my_zfs}@${latest_snapshot_backup}
 
+# keep our backup with the size limits
+cleanup_snapshots_used_limit
+cleanup_snapshots_usedbysnapshots_limit
+
 # send the incremental snapshot-stream
 zfs send -I $latest_snapshot_backup $latest_snapshot |zfs recv $my_backuppool/$my_zfs
 
@@ -68,9 +90,12 @@ if [ `zfs get -H name $my_backuppool/${latest_snapshot} |wc -m` -gt 0 ]; then
    # We destroy the clone-filesystem that marks our backup state and set our mark with creating a new clone-filesystem
    zfs destroy $my_mark
    zfs clone $my_backuppool/$latest_snapshot $my_mark
+   # keep our backup with the size limits
+   cleanup_snapshots_used_limit
+   cleanup_snapshots_usedbysnapshots_limit
 else
    # If the latest snapshot does not exist on our backup-zpool, we should 
-   # make the latest snapshot we have our new mark a do a rollback
+   # make the latest snapshot we have our new mark and do a rollback
    echo " - Fail"
    latest_existing_backup=`zfs list -H -o name -t snapshot -r $my_backuppool/$my_zfs|tail -n1`
    echo "Doing rollback of backup to $latest_existing_backup"

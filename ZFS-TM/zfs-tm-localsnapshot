@@ -31,6 +31,7 @@ calc_usedbysnapshots_bytesize () {
 }
 
 cleanup_snapshots () {
+  [ "${local_usedbysnapshots_limit}" = "" ] && return
   _local_usedbysnapshots_limit=`echo "${local_usedbysnapshots_limit}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
   calc_usedbysnapshots_bytesize
   while [ "$usedbysnapshots_bytesize" -gt "$_local_usedbysnapshots_limit" ]; do
@@ -42,8 +43,5 @@ cleanup_snapshots () {
 
 if [ "$zfs_name" = "$my_zfs" ]; then
   /sbin/zfs snapshot -r ${my_zfs}@${date}
-
-  if [ "${local_usedbysnapshots_limit}" ]; then
-    cleanup_snapshots
-  fi
+  cleanup_snapshots
 fi
