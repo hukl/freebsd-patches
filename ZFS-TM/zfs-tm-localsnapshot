@@ -24,10 +24,10 @@ if [ ! "$my_zfstm_user" = `id -nu` ]; then
    exit
 fi
 
-zfs_name=`zfs list -H -o name ${my_zfs} 2> /dev/null`
+zfs_name=`/sbin/zfs list -H -o name ${my_zfs} 2> /dev/null`
 
 calc_bytesize () {
-  current_snapshotsize=`zfs list -H -o used ${my_zfs}|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
+  current_snapshotsize=`/sbin/zfs list -H -o used ${my_zfs}|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
 }
 
 if [ "$zfs_name" = "$my_zfs" ]; then
@@ -39,7 +39,7 @@ if [ "$zfs_name" = "$my_zfs" ]; then
     calc_bytesize
 
     while [ "$current_snapshotsize" -gt "$_local_snapshotsize_limit" ]; do
-      _delete=`zfs list -H -o name -t snapshot -r ${my_zfs} | grep ${my_zfs}'@' | head -n1`
+      _delete=`/sbin/zfs list -H -o name -t snapshot -r ${my_zfs} | grep ${my_zfs}'@' | head -n1`
       /sbin/zfs destroy ${_delete}
       calc_bytesize
     done
