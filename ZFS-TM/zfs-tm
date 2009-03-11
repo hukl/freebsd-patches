@@ -24,8 +24,8 @@ if [ ! "$my_zfstm_user" = `id -nu` ]; then
 fi
 
 # We make really sure our backup zpool is reachable and exists
-if [ ! `zpool list -H -o name|grep $my_backuppool` ]; then
-   echo "ERROR: Backup Pool not reachable"
+if [ `zpool list -H -o health $my_backuppool` != "ONLINE" ]; then
+   echo "ERROR: Backup Pool not Online"
    exit
 fi
 
