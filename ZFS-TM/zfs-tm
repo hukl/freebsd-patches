@@ -23,8 +23,9 @@ if [ ! "$my_zfstm_user" = `id -nu` ]; then
    exit
 fi
 
+my_backuppool_status=`/sbin/zpool list -H -o health $my_backuppool 2> /dev/null`
 # We make really sure our backup zpool is reachable and exists
-if [ `zpool list -H -o health $my_backuppool` != "ONLINE" ]; then
+if [ "$my_backuppool_status" != "ONLINE" ]; then
    echo "ERROR: Backup Pool not Online"
    exit
 fi
@@ -62,9 +63,9 @@ cleanup_snapshots_used_limit () {
 }
 
 # This is the latest snapshot in our backup zpool, we determin its name by looking at the origin of a clone-filesystem we created
-latest_snapshot_backup=`zfs list -H -o origin $my_mark | cut -d '@' -f2`
+latest_snapshot_backup=`/sbin/zfs list -H -o origin $my_mark | cut -d '@' -f2`
 # This is the latest snapshot in our zpool
-latest_snapshot=`zfs list -H -o name -t snapshot -r $my_zfs|tail -n1`
+latest_snapshot=`/sbin/zfs list -H -o name -t snapshot -r $my_zfs|tail -n1`
 
 # If both zpools have the same time-stamp, the backup is up-to-date and we can stop here
 if [ "${my_zfs}@$latest_snapshot_backup" = "$latest_snapshot" ]; then
@@ -75,21 +76,21 @@ fi
 echo -n "Copying incremental backup from ${my_zfs}@$latest_snapshot_backup till $latest_snapshot"
 
 # make sure the backup is where we left it and noone has edited any data
-zfs rollback $my_backuppool/${my_zfs}@${latest_snapshot_backup}
+/sbin/zfs rollback $my_backuppool/${my_zfs}@${latest_snapshot_backup}
 
 # keep our backup with the size limits
 cleanup_snapshots_used_limit
 cleanup_snapshots_usedbysnapshots_limit
 
 # send the incremental snapshot-stream
-zfs send -I $latest_snapshot_backup $latest_snapshot |zfs recv $my_backuppool/$my_zfs
+/sbin/zfs send -I $latest_snapshot_backup $latest_snapshot |/sbin/zfs recv $my_backuppool/$my_zfs
 
-if [ `zfs get -H name $my_backuppool/${latest_snapshot} |wc -m` -gt 0 ]; then
+if [ `/sbin/zfs get -H name $my_backuppool/${latest_snapshot} |wc -m` -gt 0 ]; then
    # If the latest snapshot on our zpool now exists on our backup-zpool the backup was a success
    echo " - Success"
    # We destroy the clone-filesystem that marks our backup state and set our mark with creating a new clone-filesystem
-   zfs destroy $my_mark
-   zfs clone $my_backuppool/$latest_snapshot $my_mark
+   /sbin/zfs destroy $my_mark
+   /sbin/zfs clone $my_backuppool/$latest_snapshot $my_mark
    # keep our backup with the size limits
    cleanup_snapshots_used_limit
    cleanup_snapshots_usedbysnapshots_limit
@@ -97,7 +98,7 @@ else
    # If the latest snapshot does not exist on our backup-zpool, we should 
    # make the latest snapshot we have our new mark and do a rollback
    echo " - Fail"
-   latest_existing_backup=`zfs list -H -o name -t snapshot -r $my_backuppool/$my_zfs|tail -n1`
+   latest_existing_backup=`/sbin/zfs list -H -o name -t snapshot -r $my_backuppool/$my_zfs|tail -n1`
    echo "Doing rollback of backup to $latest_existing_backup"
-   zfs rollback ${latest_existing_backup}
+   /sbin/zfs rollback ${latest_existing_backup}
 fi
