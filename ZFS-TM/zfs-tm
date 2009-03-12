@@ -30,6 +30,14 @@ if [ "$my_backuppool_status" != "ONLINE" ]; then
    exit
 fi
 
+my_local_zfstm_id=`/sbin/zfs list -H -o com.h3q:zfs-tm:id ${my_zfs} 2> /dev/null`
+my_backup_zfstm_id=`/sbin/zfs list -H -o com.h3q:zfs-tm:id ${my_backuppool}/${my_zfs}`
+
+if [ "$my_local_zfstm_id" != "$my_backup_zfstm_id" ]; then
+   echo "ERROR: Target backup ZFS-TM not correct"
+   exit
+fi
+
 calc_usedbysnapshots_bytesize () {
   usedbysnapshots_bytesize=`/sbin/zfs list -H -o usedbysnapshots ${my_backuppool}/${my_zfs} |tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
 }
