@@ -1,11 +1,17 @@
 # The zfs filesystem that will be backed up
 my_zfs='tank/home/joe'
-# The zpool holding the backup
+# The zpool holding the backup ZFS
 my_backuppool='backup'
+# The backup ZFS holding the backup
+my_backupzfs='myhost'
+# Those settings will create a backup of the filesystem tank/home/joe into the filesystem backup/myhost/tank/home/joe
+
 # The user running the zfs-tm tool, if you set anything else than root you need to use ZFS permission delegation
 my_zfstm_user='root'
 
-# This will create a backup of the filesystem tank/home/joe into the filesystem backup/tank/home/joe
+# You can use this to do you backups through e.g., if not set a local zpool is used
+#remote_command='ssh mysshserver'
+
 
 # limits (k,M,G are usable)
 # this limit is the maximum size the backup should occupy on the backup zpool, this limit has to be fulfilled first

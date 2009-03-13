@@ -16,14 +16,14 @@ done
 [ "${my_backuppool}" = "" ] && echo $usage && exit
 [ "${my_zfstm_user}" = "" ] && echo $usage && exit
 
-my_mark="${my_backuppool}/.backupmark/${my_zfs}/latest"
+my_mark="${my_backuppool}/${my_backupzfs}/.backupmark/${my_zfs}/latest"
 
 if [ ! "$my_zfstm_user" = `id -nu` ]; then
    echo "ERROR: Not running as the right backup user"
    exit
 fi
 
-my_backuppool_status=`/sbin/zpool list -H -o health $my_backuppool 2> /dev/null`
+my_backuppool_status=`$remote_command /sbin/zpool list -H -o health $my_backuppool 2> /dev/null`
 # We make really sure our backup zpool is reachable and exists
 if [ "$my_backuppool_status" != "ONLINE" ]; then
    echo "ERROR: Backup Pool not Online"
@@ -31,19 +31,19 @@ if [ "$my_backuppool_status" != "ONLINE" ]; then
 fi
 
 my_local_zfstm_id=`/sbin/zfs list -H -o com.h3q:zfs-tm:id ${my_zfs} 2> /dev/null`
-my_backup_zfstm_id=`/sbin/zfs list -H -o com.h3q:zfs-tm:id ${my_backuppool}/${my_zfs}`
+my_backup_zfstm_id=`$remote_command /sbin/zfs list -H -o com.h3q:zfs-tm:id ${my_backuppool}/${my_backupzfs}/${my_zfs}`
 
 if [ "$my_local_zfstm_id" != "$my_backup_zfstm_id" ]; then
-   echo "ERROR: Target backup ZFS-TM not correct"
+   echo "ERROR: ID of backup ZFS-TM (${my_backuppool}/${my_backupzfs}/${my_zfs}) not correct"
    exit
 fi
 
 calc_usedbysnapshots_bytesize () {
-  usedbysnapshots_bytesize=`/sbin/zfs list -H -o usedbysnapshots ${my_backuppool}/${my_zfs} |tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
+  usedbysnapshots_bytesize=`$remote_command /sbin/zfs list -H -o usedbysnapshots ${my_backuppool}/${my_backupzfs}/${my_zfs} |tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
 }
 
 calc_used_bytesize () {
-  used_bytesize=`/sbin/zfs list -H -o used ${my_backuppool}/${my_zfs} |tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
+  used_bytesize=`$remote_command /sbin/zfs list -H -o used ${my_backuppool}/${my_backupzfs}/${my_zfs} |tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
 }
 
 cleanup_snapshots_usedbysnapshots_limit () {
@@ -52,26 +52,26 @@ cleanup_snapshots_usedbysnapshots_limit () {
   calc_usedbysnapshots_bytesize
 #  echo "Backup Snapshot Limit is: ${_backup_usedbysnapshots_limit} bytes, current use is ${usedbysnapshots_bytesize} bytes."
   while [ "$usedbysnapshots_bytesize" -gt "$_backup_usedbysnapshots_limit" ]; do
-    _delete=`/sbin/zfs list -H -o name -t snapshot -r ${my_backuppool}/${my_zfs} | grep ${my_backuppool}/${my_zfs}'@' | head -n1`
-    /sbin/zfs destroy ${_delete}
+    _delete=`$remote_command /sbin/zfs list -H -o name -t snapshot -r ${my_backuppool}/${my_backupzfs}/${my_zfs} | grep ${my_backuppool}/${my_backupzfs}/${my_zfs}'@' | head -n1`
+    $remote_command /sbin/zfs destroy ${_delete}
     calc_usedbysnapshots_bytesize
   done
 }
 
 cleanup_snapshots_used_limit () {
-  [ "${backup_used_limit}" = "" ] && backup_used_limit=`/sbin/zfs list -H -o available ${my_backuppool}/${my_zfs}`
+  [ "${backup_used_limit}" = "" ] && backup_used_limit=`$remote_command /sbin/zfs list -H -o available ${my_backuppool}/${my_backupzfs}/${my_zfs}`
   _backup_used_limit=`echo "${backup_used_limit}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
   calc_used_bytesize
 #  echo "Backup Total Limit is: ${_backup_used_limit} bytes, current use is ${used_bytesize} bytes."
   while [ "$used_bytesize" -gt "$_backup_used_limit" ]; do
-    _delete=`/sbin/zfs list -H -o name -t snapshot -r ${my_backuppool}/${my_zfs} | grep ${my_backuppool}/${my_zfs}'@' | head -n1`
-    /sbin/zfs destroy ${_delete}
+    _delete=`$remote_command /sbin/zfs list -H -o name -t snapshot -r ${my_backuppool}/${my_backupzfs}/${my_zfs} | grep ${my_backuppool}/${my_backupzfs}/${my_zfs}'@' | head -n1`
+    $remote_command /sbin/zfs destroy ${_delete}
     calc_used_bytesize
   done
 }
 
 # This is the latest snapshot in our backup zpool, we determin its name by looking at the origin of a clone-filesystem we created
-latest_snapshot_backup=`/sbin/zfs list -H -o origin $my_mark | cut -d '@' -f2`
+latest_snapshot_backup=`$remote_command /sbin/zfs list -H -o origin $my_mark | cut -d '@' -f2`
 # This is the latest snapshot in our zpool
 latest_snapshot=`/sbin/zfs list -H -o name -t snapshot -r $my_zfs|tail -n1`
 
@@ -84,21 +84,21 @@ fi
 echo -n "Copying incremental backup from ${my_zfs}@$latest_snapshot_backup till $latest_snapshot"
 
 # make sure the backup is where we left it and noone has edited any data
-/sbin/zfs rollback $my_backuppool/${my_zfs}@${latest_snapshot_backup}
+$remote_command /sbin/zfs rollback -r $my_backuppool/${my_backupzfs}/${my_zfs}@${latest_snapshot_backup}
 
 # keep our backup with the size limits
 cleanup_snapshots_used_limit
 cleanup_snapshots_usedbysnapshots_limit
 
 # send the incremental snapshot-stream
-/sbin/zfs send -I $latest_snapshot_backup $latest_snapshot |/sbin/zfs recv $my_backuppool/$my_zfs
+/sbin/zfs send -I $latest_snapshot_backup $latest_snapshot |$remote_command /sbin/zfs recv $my_backuppool/${my_backupzfs}/$my_zfs
 
-if [ `/sbin/zfs get -H name $my_backuppool/${latest_snapshot} |wc -m` -gt 0 ]; then
+if [ `$remote_command /sbin/zfs get -H name $my_backuppool/${my_backupzfs}/${latest_snapshot} |wc -m` -gt 0 ]; then
    # If the latest snapshot on our zpool now exists on our backup-zpool the backup was a success
    echo " - Success"
    # We destroy the clone-filesystem that marks our backup state and set our mark with creating a new clone-filesystem
-   /sbin/zfs destroy $my_mark
-   /sbin/zfs clone $my_backuppool/$latest_snapshot $my_mark
+   $remote_command /sbin/zfs destroy $my_mark
+   $remote_command /sbin/zfs clone $my_backuppool/${my_backupzfs}/$latest_snapshot $my_mark
    # keep our backup with the size limits
    cleanup_snapshots_used_limit
    cleanup_snapshots_usedbysnapshots_limit
@@ -106,7 +106,7 @@ else
    # If the latest snapshot does not exist on our backup-zpool, we should 
    # make the latest snapshot we have our new mark and do a rollback
    echo " - Fail"
-   latest_existing_backup=`/sbin/zfs list -H -o name -t snapshot -r $my_backuppool/$my_zfs|tail -n1`
+   latest_existing_backup=`$remote_command /sbin/zfs list -H -o name -t snapshot -r $my_backuppool/${my_backupzfs}/$my_zfs|tail -n1`
    echo "Doing rollback of backup to $latest_existing_backup"
-   /sbin/zfs rollback ${latest_existing_backup}
+   $remote_command /sbin/zfs rollback -r ${latest_existing_backup}
 fi
