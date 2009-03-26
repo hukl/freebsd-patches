@@ -20,7 +20,7 @@ if [ "$swapsize" ]; then
   offset=`gpart show $geom | grep '\- free \-' | awk '{print $1}'`
   gpart add -b $offset -s $swapsize -t freebsd-swap $geom
   partnum=`gpart show $geom | grep 'freebsd\-swap' |awk '{print $3}'`
-  glabel create swap /dev/${geom}p${partnum}
+  glabel label swap /dev/${geom}p${partnum}
 fi
 
 offset=`gpart show $geom | grep '\- free \-' | awk '{print $1}'`
