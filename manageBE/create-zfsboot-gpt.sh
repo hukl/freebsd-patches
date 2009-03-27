@@ -9,14 +9,14 @@ if [ "$pool" = "" ] || [ "$geom" = "" ]; then
         exit
 fi
 
-swapsize=`echo "${swapsize}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
-swapsize=`echo "${swapsize}/512" |bc`
 
 gpart create -s gpt $geom
 gpart add -b 34 -s 128 -t freebsd-boot $geom
 gpart bootcode -b /boot/pmbr -p /boot/gptzfsboot -i 1 $geom
 
 if [ "$swapsize" ]; then
+  swapsize=`echo "${swapsize}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
+  swapsize=`echo "${swapsize}/512" |bc`
   offset=`gpart show $geom | grep '\- free \-' | awk '{print $1}'`
   gpart add -b $offset -s $swapsize -t freebsd-swap $geom
   partnum=`gpart show $geom | grep 'freebsd\-swap' |awk '{print $3}'`
@@ -65,6 +65,7 @@ zpool set bootfs=$pool/ROOT/$pool $pool
 echo 'zfs_load="YES"' >> /$pool/ROOT/$pool/boot/loader.conf
 echo "vfs.root.mountfrom=\"zfs:$pool/ROOT/$pool\"" >> /$pool/ROOT/$pool/boot/loader.conf
 echo 'zfs_enable="YES"' >> /$pool/ROOT/$pool/etc/rc.conf
+touch /$pool/ROOT/$pool/etc/fstab
 
 if [ "$swapsize" ]; then
   echo 'geom_label_load="YES"' >> /$pool/ROOT/$pool/boot/loader.conf
