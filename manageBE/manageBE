@@ -27,7 +27,8 @@ case ${type} in
         
         [ "${new_bootfs}" -a "${pool}" ] || exerr ${usage_activate}
 
-        zpool set bootfs=${pool}/ROOT/${new_bootfs} ${pool}
+        /sbin/zpool set bootfs=${pool}/ROOT/${new_bootfs} ${pool}
+        /sbin/zfs promote ${pool}/ROOT/${new_bootfs}
     ;;
     create)
         # create a boot-environment
@@ -41,13 +42,13 @@ case ${type} in
         
         [ "${new_bootfs}" -a "${pool}" -a "${current_bootfs}" ] || exerr ${usage_create}
         
-        #current_bootfs=`zpool list -H -o bootfs ${pool}`
+        #current_bootfs=`/sbin/zpool list -H -o bootfs ${pool}`
         
-        zfs snapshot ${pool}/ROOT/${current_bootfs}@${new_bootfs}
-        zfs clone ${pool}/ROOT/${current_bootfs}@${new_bootfs} ${pool}/ROOT/${new_bootfs}
+        /sbin/zfs snapshot ${pool}/ROOT/${current_bootfs}@${new_bootfs}
+        /sbin/zfs clone ${pool}/ROOT/${current_bootfs}@${new_bootfs} ${pool}/ROOT/${new_bootfs}
         grep -v '^vfs.root.mountfrom' /boot/loader.conf > /${pool}/ROOT/${new_bootfs}/boot/loader.conf
         echo vfs.root.mountfrom=\"zfs:${pool}/ROOT/${new_bootfs}\" >> /${pool}/ROOT/${new_bootfs}/boot/loader.conf
-        echo "Install new kernel with option 'DESTDIR=/${pool}/ROOT/${new_bootfs}/' and run '${mgm} activate -n ${new_bootfs} -p ${pool}"
+        echo "Install new kernel with option 'DESTDIR=/${pool}/ROOT/${new_bootfs}/' and run '${mgm} activate -n ${new_bootfs} -p ${pool}'"
     ;;
     delete)
         # delete a boot-environment
@@ -61,15 +62,15 @@ case ${type} in
         
         [ "${delete_bootfs}" -a "${pool}" -a "${delete_origin}" ] || exerr ${usage_delete}
         
-        current_bootfs=`zpool list -H -o bootfs ${pool}`
+        current_bootfs=`/sbin/zpool list -H -o bootfs ${pool}`
         
         if [ ! "${pool}/ROOT/${delete_bootfs}" = "${current_bootfs}" ]; then
             if [ "${delete_origin}" = "yes" ]; then
-               origin=`zfs list -H -o origin ${pool}/ROOT/${delete_bootfs}`
+               origin=`/sbin/zfs list -H -o origin ${pool}/ROOT/${delete_bootfs}`
             fi
-            zfs destroy -r ${pool}/ROOT/${delete_bootfs} || exerr ${error_delete}
+            /sbin/zfs destroy -r ${pool}/ROOT/${delete_bootfs} || exerr ${error_delete}
             if [ "${delete_origin}" = "yes" -a "${origin}" ]; then
-                zfs destroy ${origin}
+                /sbin/zfs destroy ${origin}
             fi
         else
             echo "${delete_bootfs} is ZFS bootfs, unable to delete!"
@@ -81,9 +82,9 @@ case ${type} in
         done; shift $(( ${OPTIND} - 1 ))
 
 	rootfs=`mount | head -n1 | grep 'on / ' |cut -d ' ' -f1`
-	for pool in `zpool list -H -o name`; do
+	for pool in `/sbin/zpool list -H -o name`; do
 		echo "Poolname: $pool"
-		bootfs=`zpool list -H -o bootfs $pool`
+		bootfs=`/sbin/zpool list -H -o bootfs $pool`
 
 		if [ "$bootfs" = "-" ]; then
 			echo "No BE setup"
@@ -91,25 +92,25 @@ case ${type} in
 			continue
 		fi
 
-		mountpoint_length=`zfs list -H -o mountpoint -r $pool/ROOT | tail +2 |wc -L`
+		mountpoint_length=`/sbin/zfs list -H -o mountpoint -r $pool/ROOT | tail +2 |wc -L`
 		if [ "$mountpoint_length" -lt "10" ]; then
 			mountpoint_length=10
 		fi
-		name_length=`zfs list -H -o name -r $pool/ROOT | tail +2 | sed s:^$pool/ROOT/:: |wc -L`
+		name_length=`/sbin/zfs list -H -o name -r $pool/ROOT | tail +2 | sed s:^$pool/ROOT/:: |wc -L`
 		if [ "$name_length" -lt "4" ]; then
 			name_length=4
 		fi
-		space_length=`zfs list -H -o used -r $pool/ROOT | tail +2 |wc -L`
+		space_length=`/sbin/zfs list -H -o used -r $pool/ROOT | tail +2 |wc -L`
 		if [ "$space_length" -lt "5" ]; then
 			space_length=5
 		fi
-		snapshot_length=`zfs list -t snapshot -H -o name -r $pool/ROOT | sed s:^$pool/ROOT/::  | wc -L`
+		snapshot_length=`/sbin/zfs list -t snapshot -H -o name -r $pool/ROOT | sed s:^$pool/ROOT/::  | wc -L`
 
 		printf "%-${name_length}s %-6s %-6s %-${mountpoint_length}s %-${space_length}s\\n" BE Active Active Mountpoint Space
 		printf "%-${name_length}s %-6s %-6s %-${mountpoint_length}s %-${space_length}s\\n" Name Now Reboot - Used
 		printf "%-${name_length}s %-6s %-6s %-${mountpoint_length}s %-${space_length}s\\n" ---- ------ ------ ---------- -----
 
-		for be_mountpoint in `zfs list -H -o name -r $pool/ROOT |tail +2`; do
+		for be_mountpoint in `/sbin/zfs list -H -o name -r $pool/ROOT |tail +2`; do
 
 			be_name=`echo ${be_mountpoint}|sed s:^$pool/ROOT/::`
 
@@ -124,18 +125,18 @@ case ${type} in
 
 			be_mountpoint="/${be_mountpoint}"
 	
-			be_space=`zfs list -H -o used $be_mountpoint`
+			be_space=`/sbin/zfs list -H -o used $be_mountpoint`
 	
 
 			printf "%-${name_length}s %-6s %-6s %-${mountpoint_length}s %${space_length}s\\n" $be_name $be_active $be_nextboot $be_mountpoint $be_space
 
 			if [ "$verbose" = "YES" ]; then
-			be_created=`zfs list -H -o creation $be_mountpoint`
+			be_created=`/sbin/zfs list -H -o creation $be_mountpoint`
 			echo
 			printf "\t%-${snapshot_length}s %-21s\\n" Name Created
 			printf "\t%-${snapshot_length}s %-21s\\n" $be_name "$be_created"
-			for snapshot_name in `zfs list -t snapshot -H -r -o name $pool/ROOT/$be_name|sed s:^$pool/ROOT/::`; do
-				snapshot_created=`zfs list -t snapshot -H -o creation $pool/ROOT/$snapshot_name`
+			for snapshot_name in `/sbin/zfs list -t snapshot -H -r -o name $pool/ROOT/$be_name|sed s:^$pool/ROOT/::`; do
+				snapshot_created=`/sbin/zfs list -t snapshot -H -o creation $pool/ROOT/$snapshot_name`
 				printf "\t%-${snapshot_length}s %-21s\\n" $snapshot_name "$snapshot_created"
 			done
 			echo
