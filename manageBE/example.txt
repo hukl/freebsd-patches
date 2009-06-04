@@ -1,0 +1,161 @@
+zfsbsd# uname -rs
+FreeBSD 7.2-STABLE
+
+Lets take a look at our zfs-root setup.
+
+zfsbsd# zpool status
+  pool: rpool
+ state: ONLINE
+ scrub: none requested
+config:
+
+	NAME        STATE     READ WRITE CKSUM
+	rpool       ONLINE       0     0     0
+	  ad0p3     ONLINE       0     0     0
+
+errors: No known data errors
+
+zfsbsd# zfs list -t all
+NAME                     USED  AVAIL  REFER  MOUNTPOINT
+rpool/ROOT               252M  6.89G    20K  /rpool/ROOT
+rpool/ROOT/oldBE         252M  6.89G   252M  /rpool/ROOT/oldBE
+rpool/ROOT/oldBE@oldBE   287K      -   252M  -
+rpool/tmp                 29K  6.89G    29K  /tmp
+rpool/usr-local         1.66M  6.89G  1.66M  /usr/local
+rpool/var               81.9M  6.89G  81.9M  /var
+
+Our current boot-environment is called "oldBE" and is mounted on /.
+
+zfsbsd# manageBE list
+Poolname: rpool
+BE    Active Active Mountpoint        Space
+Name  Now    Reboot -                 Used 
+----  ------ ------ ----------        -----
+oldBE yes    yes    /rpool/ROOT/oldBE  252M
+
+zfsbsd# mount
+rpool/ROOT/oldBE on / (zfs, local)
+devfs on /dev (devfs, local)
+rpool on /rpool (zfs, local)
+rpool/ROOT on /rpool/ROOT (zfs, local)
+rpool/tmp on /tmp (zfs, local)
+rpool/usr-local on /usr/local (zfs, local)
+rpool/var on /var (zfs, local)
+
+Lets create a new boot-environment "newBE" using the old boot-environment "oldBE" as source, thus including all the files.
+
+zfsbsd# manageBE create 
+Usage: manageBE create -n <newBE> -s <sourceBE> -p <pool>
+
+zfsbsd# manageBE create -n newBE -s oldBE -p rpool
+Install new kernel with option 'DESTDIR=/rpool/ROOT/newBE/' and run 'manageBE activate -n newBE -p rpool'
+
+The new boot-environment was created, it is not yet activated but mounted on "/rpool/ROOT/newBE/"
+
+zfsbsd# manageBE list
+Poolname: rpool
+BE    Active Active Mountpoint        Space
+Name  Now    Reboot -                 Used 
+----  ------ ------ ----------        -----
+newBE no     no     /rpool/ROOT/newBE     0
+oldBE yes    yes    /rpool/ROOT/oldBE  252M
+
+zfsbsd# mount
+rpool/ROOT/oldBE on / (zfs, local)
+devfs on /dev (devfs, local)
+rpool on /rpool (zfs, local)
+rpool/ROOT on /rpool/ROOT (zfs, local)
+rpool/ROOT/newBE on /rpool/ROOT/newBE (zfs, local)
+rpool/tmp on /tmp (zfs, local)
+rpool/usr-local on /usr/local (zfs, local)
+rpool/var on /var (zfs, local)
+
+Now you could do a "freebsd-update -b /rpool/ROOT/newBE" or "make installkernel DESTDIR=/rpool/ROOT/newBE/".
+
+After that, we activate the new boot-environment too boot from it.
+
+zfsbsd# manageBE activate -n newBE -p rpool
+
+We can see that it is activated on the next reboot.
+
+zfsbsd# manageBE list
+Poolname: rpool
+BE    Active Active Mountpoint        Space
+Name  Now    Reboot -                 Used 
+----  ------ ------ ----------        -----
+newBE no     yes    /rpool/ROOT/newBE  252M
+oldBE yes    no     /rpool/ROOT/oldBE  252M
+
+Lets fire it up!
+
+zfsbsd# reboot
+
+After the reboot.
+
+zfsbsd# uname -rs
+FreeBSD 7.2-STABLE
+
+Now the new boot-environment is enable and in use, the old is mounted but not in use anymore.
+
+zfsbsd# manageBE list
+Poolname: rpool
+BE    Active Active Mountpoint        Space
+Name  Now    Reboot -                 Used 
+----  ------ ------ ----------        -----
+newBE yes    yes    /rpool/ROOT/newBE  253M
+oldBE no     no     /rpool/ROOT/oldBE  383K
+
+zfsbsd# mount
+rpool/ROOT/newBE on / (zfs, local)
+rpool/ROOT on /rpool/ROOT (zfs, local)
+rpool/ROOT/oldBE on /rpool/ROOT/oldBE (zfs, local)
+rpool/tmp on /tmp (zfs, local)
+rpool/usr-local on /usr/local (zfs, local)
+rpool/var on /var (zfs, local)
+
+zfsbsd# zfs list -t all
+NAME                     USED  AVAIL  REFER  MOUNTPOINT
+rpool/ROOT               253M  6.89G    21K  /rpool/ROOT
+rpool/ROOT/newBE         253M  6.89G   252M  /rpool/ROOT/newBE
+rpool/ROOT/newBE@oldBE   391K      -   252M  -
+rpool/ROOT/newBE@newBE   185K      -   252M  -
+rpool/ROOT/oldBE         383K  6.89G   252M  /rpool/ROOT/oldBE
+rpool/tmp                 29K  6.89G    29K  /tmp
+rpool/usr-local         1.66M  6.89G  1.66M  /usr/local
+rpool/var               81.9M  6.89G  81.9M  /var
+
+Lets get rid of the old boot-environment if we don't need it anymore.
+
+zfsbsd# manageBE delete
+Usage: manageBE delete -n <BE> -p <pool> -o [yes|no]
+
+The -o option deletes the snapshot the old boot-environment is depending on too.
+
+zfsbsd# manageBE delete -n oldBE -p rpool -o yes
+
+Yep its gone.
+
+zfsbsd# zfs list -t all
+NAME                     USED  AVAIL  REFER  MOUNTPOINT
+rpool/ROOT               253M  6.89G    19K  /rpool/ROOT
+rpool/ROOT/newBE         253M  6.89G   252M  /rpool/ROOT/newBE
+rpool/ROOT/newBE@oldBE   706K      -   252M  -
+rpool/tmp                 29K  6.89G    29K  /tmp
+rpool/usr-local         1.66M  6.89G  1.66M  /usr/local
+rpool/var               81.9M  6.89G  81.9M  /var
+
+zfsbsd# manageBE list
+Poolname: rpool
+BE    Active Active Mountpoint        Space
+Name  Now    Reboot -                 Used 
+----  ------ ------ ----------        -----
+newBE yes    yes    /rpool/ROOT/newBE  253M
+
+zfsbsd# mount
+rpool/ROOT/newBE on / (zfs, local)
+devfs on /dev (devfs, local)
+rpool on /rpool (zfs, local)
+rpool/ROOT on /rpool/ROOT (zfs, local)
+rpool/tmp on /tmp (zfs, local)
+rpool/usr-local on /usr/local (zfs, local)
+rpool/var on /var (zfs, local)
