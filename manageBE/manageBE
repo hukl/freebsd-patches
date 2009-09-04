@@ -100,7 +100,7 @@ case ${type} in
 		if [ "$name_length" -lt "4" ]; then
 			name_length=4
 		fi
-		space_length=`/sbin/zfs list -H -o used -r $pool/ROOT | tail +2 |wc -L`
+		space_length=`/sbin/zfs list -H -o referenced -r $pool/ROOT | tail +2 |wc -L`
 		if [ "$space_length" -lt "5" ]; then
 			space_length=5
 		fi
@@ -110,33 +110,33 @@ case ${type} in
 		printf "%-${name_length}s %-6s %-6s %-${mountpoint_length}s %-${space_length}s\\n" Name Now Reboot - Used
 		printf "%-${name_length}s %-6s %-6s %-${mountpoint_length}s %-${space_length}s\\n" ---- ------ ------ ---------- -----
 
-		for be_mountpoint in `/sbin/zfs list -H -o name -r $pool/ROOT |tail +2`; do
+		for be_filesystem in `/sbin/zfs list -H -S creation -o name -r $pool/ROOT |grep -v "^$pool/ROOT\$"`; do
 
-			be_name=`echo ${be_mountpoint}|sed s:^$pool/ROOT/::`
+			be_name=`echo ${be_filesystem}|sed s:^$pool/ROOT/::`
 
 			be_active='no'	
-			if [ "${be_mountpoint}" = "${rootfs}" ]; then
+			if [ "${be_filesystem}" = "${rootfs}" ]; then
 			 	be_active='yes'	
 			fi
 			be_nextboot='no'
-			if [ "${be_mountpoint}" = "${bootfs}" ]; then
+			if [ "${be_filesystem}" = "${bootfs}" ]; then
 			 	be_nextboot='yes'	
 			fi
 
-			be_mountpoint="/${be_mountpoint}"
-	
-			be_space=`/sbin/zfs list -H -o used $be_mountpoint`
+			be_space=`/sbin/zfs list -H -o referenced $be_filesystem`
+
+			be_mountpoint=`/sbin/zfs list -H -o mountpoint $be_filesystem`
 	
 
 			printf "%-${name_length}s %-6s %-6s %-${mountpoint_length}s %${space_length}s\\n" $be_name $be_active $be_nextboot $be_mountpoint $be_space
 
 			if [ "$verbose" = "YES" ]; then
-			be_created=`/sbin/zfs list -H -o creation $be_mountpoint`
+			be_created=`/sbin/zfs list -H -S creation -o creation $be_filesystem`
 			echo
 			printf "\t%-${snapshot_length}s %-21s\\n" Name Created
 			printf "\t%-${snapshot_length}s %-21s\\n" $be_name "$be_created"
 			for snapshot_name in `/sbin/zfs list -t snapshot -H -r -o name $pool/ROOT/$be_name|sed s:^$pool/ROOT/::`; do
-				snapshot_created=`/sbin/zfs list -t snapshot -H -o creation $pool/ROOT/$snapshot_name`
+				snapshot_created=`/sbin/zfs list -t snapshot -H -S creation -o creation $pool/ROOT/$snapshot_name`
 				printf "\t%-${snapshot_length}s %-21s\\n" $snapshot_name "$snapshot_created"
 			done
 			echo
