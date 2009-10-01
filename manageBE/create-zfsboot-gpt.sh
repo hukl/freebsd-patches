@@ -18,21 +18,18 @@ if [ "$swapsize" ]; then
   swapsize=`echo "${swapsize}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
   swapsize=`echo "${swapsize}/512" |bc`
   offset=`gpart show $geom | grep '\- free \-' | awk '{print $1}'`
-  gpart add -b $offset -s $swapsize -t freebsd-swap $geom
-  partnum=`gpart show $geom | grep 'freebsd\-swap' |awk '{print $3}'`
-  glabel label swap /dev/${geom}p${partnum}
+  gpart add -b $offset -s $swapsize -t freebsd-swap -l swap $geom
 fi
 
 offset=`gpart show $geom | grep '\- free \-' | awk '{print $1}'`
 size=`gpart show $geom | grep '\- free \-' | awk '{print $2}'`
-gpart add -b $offset -s $size -t freebsd-zfs $geom
-partnum=`gpart show $geom | grep 'freebsd\-zfs' |awk '{print $3}'`
+gpart add -b $offset -s $size -t freebsd-zfs -l system-disk0 $geom
 
 # Make first partition active so the BIOS boots from it
 echo 'a 1' | fdisk -f - $geom
 
 # Create the pool and the rootfs
-zpool create $pool ${geom}p${partnum}
+zpool create $pool gpt/system-disk0
 zfs create -o compression=lzjb -p $pool/ROOT/$pool
 
 # Now we create some stuff we also would like to have in seperate filesystems
@@ -69,7 +66,7 @@ touch /$pool/ROOT/$pool/etc/fstab
 
 if [ "$swapsize" ]; then
   echo 'geom_label_load="YES"' >> /$pool/ROOT/$pool/boot/loader.conf
-  echo "/dev/label/swap none swap sw 0 0" > /$pool/ROOT/$pool/etc/fstab
+  echo "/dev/gpt/swap none swap sw 0 0" > /$pool/ROOT/$pool/etc/fstab
 fi
 
 # Copy the zpool.cache to the new filesystem
