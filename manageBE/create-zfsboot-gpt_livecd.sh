@@ -199,7 +199,9 @@ echo 'zfs_enable="YES"' >> /$pool/ROOT/$pool/etc/rc.conf
 touch /$pool/ROOT/$pool/etc/fstab
 
 if [ "$swapsize" ]; then
-  echo "/dev/gpt/swap0 none swap sw 0 0" > /$pool/ROOT/$pool/etc/fstab
+  for disk in $provider; do
+    echo "/dev/gpt/swap-${disk} none swap sw 0 0" > /$pool/ROOT/$pool/etc/fstab
+  done
 fi
 
 # Copy the zpool.cache to the new filesystem
