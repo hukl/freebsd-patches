@@ -109,9 +109,12 @@ sleep 3
 zfs create -o compression=lzjb -p $pool/ROOT/$pool
 
 # Now we create some stuff we also would like to have in seperate filesystems
-for filesystem in tmp var usr-src usr-obj usr-local tmp; do
+for filesystem in var usr-src usr-obj usr-local tmp; do
    echo "Creating $pool/$filesystem"
    zfs create $pool/$filesystem
+   if [ "$filesystem" = "tmp" ]; then
+     chmod 1777 /$pool/tmp
+   fi
    zfs umount $pool/$filesystem
    _filesystem=`echo $filesystem | sed s:-:\/:g`
    zfs set mountpoint=/${_filesystem} $pool/${filesystem}
