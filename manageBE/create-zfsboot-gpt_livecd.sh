@@ -7,7 +7,7 @@
 # This only works with FreeBSD 8.0 (tested with 8.0-RC1), you have been warned!
 #
 # Startup the FreeBSD livefs CD. Go into the Fixit console. Create /var/db if you want to use DHCP. Configure
-# your network settings. Fetch http://anonsvn.h3q.com/projects/freebsd-patches/browser/manageBE/create-zfsboot-gpt_livecd.sh?format=txt
+# your network settings. Fetch http://anonsvn.h3q.com/projects/freebsd-patches/export/44/manageBE/create-zfsboot-gpt_livecd.sh
 # Execute the script with the following parameter:
 #
 # -p sets the geom provider to use
