@@ -13,19 +13,23 @@
 # -p sets the geom provider to use
 # -s sets the swapsize to create, you can use m/M for megabyte or g/G for gigabyte
 # -n sets the name of the zpool to create
+# -f sets the ftp-server used for getting the freebsd packages, default is ftp.freebsd.org
 #
 # You can use more than one device, creating a mirror. To specify more than one device, use multiple -p options. 
 # eg. create-zfsboot-gpt_livecd.sh -p ad0 -p ad1 -s 512m -n tank
 
-usage="Usage: create-zfsboot-gpt_livecd.sh -p <geom_provider> -s <swapsize> -n <zpoolname>"
+ftphost='ftp.freebsd.org'
+
+usage="Usage: create-zfsboot-gpt_livecd.sh -p <geom_provider> -s <swapsize> -n <zpoolname> -f <ftphost>"
 
 exerr () { echo -e "$*" >&2 ; exit 1; }
 
-while getopts p:s:n: arg
+while getopts p:s:n:f: arg
 do case ${arg} in
   p) provider="$provider ${OPTARG}";;
   s) swapsize=${OPTARG};;
   n) pool=${OPTARG};;
+  f) ftphost=${OPTARG};;
   ?) exerr ${usage};;
 esac; done; shift $(( ${OPTIND} - 1 ))
 
@@ -129,7 +133,6 @@ echo 'Now install world, kernel etc'
 zfs create $pool/installdata
 cd /$pool/installdata
 
-ftphost='192.168.23.1'
 sleep 5
 arch=`uname -p`
 release=`uname -r`
