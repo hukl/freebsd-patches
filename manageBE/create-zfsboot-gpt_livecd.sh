@@ -3,6 +3,8 @@
 # This script is considered beer ware (http://en.wikipedia.org/wiki/Beerware)
 #
 # DISCLAIMER: Use at your own risk! Always make backups, don't blame me if this renders your system unusable or you lose any data! 
+# 
+# This only works with FreeBSD 8.0 (tested with 8.0-RC1), you have been warned!
 #
 # Startup the FreeBSD livefs CD. Go into the Fixit console. Create /var/db if you want to use DHCP. Configure
 # your network settings. Fetch http://anonsvn.h3q.com/projects/freebsd-patches/browser/manageBE/create-zfsboot-gpt_livecd.sh?format=txt
