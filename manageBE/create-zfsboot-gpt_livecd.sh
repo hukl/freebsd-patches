@@ -208,7 +208,7 @@ touch /$pool/ROOT/$pool/etc/fstab
 
 if [ "$swapsize" ]; then
   for disk in $provider; do
-    echo "/dev/gpt/swap-${disk} none swap sw 0 0" > /$pool/ROOT/$pool/etc/fstab
+    echo "/dev/gpt/swap-${disk} none swap sw 0 0" >> /$pool/ROOT/$pool/etc/fstab
   done
 fi
 
