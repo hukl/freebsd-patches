@@ -1,59 +1,89 @@
 #!/bin/sh
+# Philipp Wuensche
+# This script is considered beer ware (http://en.wikipedia.org/wiki/Beerware)
+#
+# DISCLAIMER: Use at your own risk! Always make backups, don't blame me if this renders your system unusable or you lose any data! 
+#
+# Startup the FreeBSD livefs CD. Go into the Fixit console. Create /var/db if you want to use DHCP. Configure
+# your network settings. Fetch http://anonsvn.h3q.com/projects/freebsd-patches/browser/manageBE/create-zfsboot-gpt_livecd.sh?format=txt
+# Execute the script with the following parameter:
+#
+# -p sets the geom provider to use
+# -s sets the swapsize to create, you can use m/M for megabyte or g/G for gigabyte
+# -n sets the name of the zpool to create
+#
+# You can use more than one device, creating a mirror. To specify more than one device, use multiple -p options. 
+# eg. create-zfsboot-gpt_livecd.sh -p ad0 -p ad1 -s 512m -n tank
 
-pool=$1
-geom=$2
-swapsize=$3
-sec_geom=$4
+usage="Usage: create-zfsboot-gpt_livecd.sh -p <geom_provider> -s <swapsize> -n <zpoolname>"
 
-if [ "$pool" = "" ] || [ "$geom" = "" ]; then
-        echo 'Usage <pool> <geom> (swapsize) (second-geom)'
-        exit
+exerr () { echo -e "$*" >&2 ; exit 1; }
+
+while getopts p:s:n: arg
+do case ${arg} in
+  p) provider="$provider ${OPTARG}";;
+  s) swapsize=${OPTARG};;
+  n) pool=${OPTARG};;
+  ?) exerr ${usage};;
+esac; done; shift $(( ${OPTIND} - 1 ))
+
+if [ -z "$pool" ] || [ -z "$provider" ] ; then
+  exerr ${usage}
+  exit
 fi
 
-for disk in $geom $sec_geom; do
+for disk in $provider; do
   dd if=/dev/zero of=/dev/$disk bs=512 count=79
   gpart create -s gpt $disk
 done
 
-if [ "$sec_geom" ]; then
-   geom_size=`gpart show $geom | grep '\- free \-' | awk '{print $2}'`
-   sec_geom_size=`gpart show $sec_geom | grep '\- free \-' | awk '{print $2}'`
-   if [ "$geom_size" -ne "$sec_geom_size" ]; then
-      echo "WARNING: $geom and $sec_geom are not the same size. Will use smaller geom as reference!"
-      sleep 5
-      if [ "$geom_size" -gt "$sec_geom_size" ]; then
-         tmp_geom="$geom"
-         geom="$sec_geom"
-         sec_geom="$tmp_geom"
-      fi
-   fi
-fi
+devcount=`echo ${provider} |wc -w`
 
-for disk in $geom $sec_geom; do
+smallest_disk_size='0'
+for disk in $provider; do
+    disk_size=`gpart show $disk | grep '\- free \-' | awk '{print $2}'`
+    echo "Checking: $disk has size $disk_size"
+    if [ "$smallest_disk_size" -gt "$disk_size" ] || [ "$smallest_disk_size" -eq "0" ]; then
+        smallest_disk_size=$disk_size
+        ref_disk=$disk
+    fi
+done
+
+echo "Using $ref_disk (smallest or only disk) as reference disk for calculation offsets"
+sleep 3
+
+for disk in $provider; do
   gpart add -b 34 -s 128 -t freebsd-boot $disk
 done
+
+sleep 3
 
 if [ "$swapsize" ]; then
   swapsize=`echo "${swapsize}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
   swapsize=`echo "${swapsize}/512" |bc`
-  offset=`gpart show $geom | grep '\- free \-' | awk '{print $1}'`
-  gpart add -b $offset -s $swapsize -t freebsd-swap -l swap0 $geom
-fi
-if [ "$sec_geom" ]; then
-  gpart add -b $offset -s $swapsize -t freebsd-swap -l swap1 $sec_geom
+  offset=`gpart show $ref_disk | grep '\- free \-' | awk '{print $1}'`
+  for disk in $provider; do
+    gpart add -b $offset -s $swapsize -t freebsd-swap -l swap-${disk} ${disk}
+  done
 fi
 
-offset=`gpart show $geom | grep '\- free \-' | awk '{print $1}'`
-size=`gpart show $geom | grep '\- free \-' | awk '{print $2}'`
-gpart add -b $offset -s $size -t freebsd-zfs -l system-disk0 $geom
-if [ "$sec_geom" ]; then
-  gpart add -b $offset -s $size -t freebsd-zfs -l system-disk1 $sec_geom
-fi
+sleep 3
+
+offset=`gpart show $ref_disk | grep '\- free \-' | awk '{print $1}'`
+size=`gpart show $ref_disk | grep '\- free \-' | awk '{print $2}'`
+for disk in $provider; do
+  gpart add -b $offset -s $size -t freebsd-zfs -l system-${disk} ${disk}
+  labellist="${labellist} gpt/system-${disk}"
+done
+
+sleep 3
 
 # Make first partition active so the BIOS boots from it
-for disk in $geom $sec_geom; do
+for disk in $provider; do
   echo 'a 1' | fdisk -f - $disk
 done
+
+sleep 3
 
 kldload /mnt2/boot/kernel/opensolaris.ko
 kldload /mnt2/boot/kernel/zfs.ko
@@ -62,11 +92,14 @@ kldload /mnt2/boot/kernel/zfs.ko
 mkdir /boot/zfs
 
 # Create the pool and the rootfs
-if [ "$sec_geom" ]; then 
-  zpool create -f $pool mirror gpt/system-disk0 gpt/system-disk1
+if [ "$devcount" -gt 1 ]; then
+  zpool create -f $pool mirror ${labellist}
 else
-  zpool create -f $pool gpt/system-disk0
+  zpool create -f $pool ${labellist}
 fi
+
+sleep 3
+
 zfs create -o compression=lzjb -p $pool/ROOT/$pool
 
 # Now we create some stuff we also would like to have in seperate filesystems
@@ -140,7 +173,7 @@ rm /$pool/ROOT/$pool/tmp/chroot-command.sh
 zfs destroy $pool/installdata
 
 echo "Install new bootcode"
-for disk in $geom $sec_geom; do
+for disk in $provider; do
   gpart bootcode -b /$pool/ROOT/$pool/boot/pmbr -p /$pool/ROOT/$pool/boot/gptzfsboot -i 1 $disk
 done
 
@@ -174,4 +207,4 @@ cp /boot/zfs/zpool.cache /$pool/ROOT/$pool/boot/zfs/zpool.cache
 
 sleep 5
 
-echo "Please reboot the system from the harddisk(s), remove the FreeBSD from you cdrom!"
+echo "Please reboot the system from the harddisk(s), remove the FreeBSD CD from you cdrom!"
