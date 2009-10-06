@@ -73,20 +73,17 @@ sleep 2
 echo "Creating GPT boot partition on disks:"
 for disk in $provider; do
   echo " ->  ${disk}"
-  gpart add -b 34 -s 128 -t freebsd-boot $disk > /dev/null
+  gpart add -s 128 -t freebsd-boot $disk > /dev/null
 done
 
 echo
 sleep 2
 
 if [ "$swapsize" ]; then
-  swapsize=`echo "${swapsize}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
-  swapsize=`echo "${swapsize}/512" |bc`
-  offset=`gpart show $ref_disk | grep '\- free \-' | awk '{print $1}'`
   echo "Creating GPT swap partition on with size ${swapsize} on disks: "
   for disk in $provider; do
     echo " ->  ${disk}"
-    gpart add -b $offset -s $swapsize -t freebsd-swap -l swap-${disk} ${disk} > /dev/null
+    gpart add -s $swapsize -t freebsd-swap -l swap-${disk} ${disk} > /dev/null
   done
 fi
 
