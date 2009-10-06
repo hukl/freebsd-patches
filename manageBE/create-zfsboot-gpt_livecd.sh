@@ -7,7 +7,7 @@
 # This only works with FreeBSD 8.0 (tested with 8.0-RC1), you have been warned!
 #
 # Startup the FreeBSD livefs CD. Go into the Fixit console. Create /var/db if you want to use DHCP. Configure
-# your network settings. Fetch http://anonsvn.h3q.com/projects/freebsd-patches/export/44/manageBE/create-zfsboot-gpt_livecd.sh
+# your network settings. Fetch http://anonsvn.h3q.com/projects/freebsd-patches/export/45/manageBE/create-zfsboot-gpt_livecd.sh
 # Execute the script with the following parameter:
 #
 # -p sets the geom provider to use
@@ -38,58 +38,81 @@ if [ -z "$pool" ] || [ -z "$provider" ] ; then
   exit
 fi
 
+echo "Creating GPT label on disks:"
 for disk in $provider; do
-  dd if=/dev/zero of=/dev/$disk bs=512 count=79
-  gpart create -s gpt $disk
+  if [ ! -e "/dev/$disk" ]; then
+    echo " -> ERROR: $disk does not exist"
+    exit
+  fi
+  echo " -> $disk"
+  dd if=/dev/zero of=/dev/$disk bs=512 count=79 > /dev/null 2>&1
+  gpart create -s gpt $disk > /dev/null
 done
+
+echo
+sleep 1
 
 devcount=`echo ${provider} |wc -w`
 
 smallest_disk_size='0'
+echo "Checking disks for size:"
 for disk in $provider; do
     disk_size=`gpart show $disk | grep '\- free \-' | awk '{print $2}'`
-    echo "Checking: $disk has size $disk_size"
+    echo " -> $disk - total size $disk_size"
     if [ "$smallest_disk_size" -gt "$disk_size" ] || [ "$smallest_disk_size" -eq "0" ]; then
         smallest_disk_size=$disk_size
         ref_disk=$disk
     fi
 done
 
-echo "Using $ref_disk (smallest or only disk) as reference disk for calculation offsets"
-sleep 3
+echo
+echo "NOTICE: Using $ref_disk (smallest or only disk) as reference disk for calculation offsets"
+echo
+sleep 2
 
+echo "Creating GPT boot partition on disks:"
 for disk in $provider; do
-  gpart add -b 34 -s 128 -t freebsd-boot $disk
+  echo " ->  ${disk}"
+  gpart add -b 34 -s 128 -t freebsd-boot $disk > /dev/null
 done
 
-sleep 3
+echo
+sleep 2
 
 if [ "$swapsize" ]; then
   swapsize=`echo "${swapsize}"|tr GMKBWX gmkbwx|sed -Ees:g:km:g -es:m:kk:g -es:k:"*2b":g -es:b:"*128w":g -es:w:"*4 ":g -e"s:(^|[^0-9])0x:\1\0X:g" -ey:x:"*":|bc |sed "s:\.[0-9]*$::g"`
   swapsize=`echo "${swapsize}/512" |bc`
   offset=`gpart show $ref_disk | grep '\- free \-' | awk '{print $1}'`
+  echo "Creating GPT swap partition on with size ${swapsize} on disks: "
   for disk in $provider; do
-    gpart add -b $offset -s $swapsize -t freebsd-swap -l swap-${disk} ${disk}
+    echo " ->  ${disk}"
+    gpart add -b $offset -s $swapsize -t freebsd-swap -l swap-${disk} ${disk} > /dev/null
   done
 fi
 
-sleep 3
+echo
+sleep 2
 
 offset=`gpart show $ref_disk | grep '\- free \-' | awk '{print $1}'`
 size=`gpart show $ref_disk | grep '\- free \-' | awk '{print $2}'`
+
+echo "Creating GPT ZFS partition on with size ${size} on disks: "
 for disk in $provider; do
-  gpart add -b $offset -s $size -t freebsd-zfs -l system-${disk} ${disk}
+  echo " ->  ${disk}"
+  gpart add -b $offset -s $size -t freebsd-zfs -l system-${disk} ${disk} > /dev/null
   labellist="${labellist} gpt/system-${disk}"
 done
 
-sleep 3
+echo
+sleep 2
 
 # Make first partition active so the BIOS boots from it
 for disk in $provider; do
-  echo 'a 1' | fdisk -f - $disk
+  echo 'a 1' | fdisk -f - $disk > /dev/null 2>&1
 done
 
-sleep 3
+echo
+sleep 2
 
 kldload /mnt2/boot/kernel/opensolaris.ko
 kldload /mnt2/boot/kernel/zfs.ko
@@ -104,7 +127,12 @@ else
   zpool create -f $pool ${labellist}
 fi
 
-sleep 3
+if [ `zpool list -H -o name $pool` != "$pool" ]; then
+  echo "ERROR: Could not create zpool $pool"
+  exit
+fi
+
+sleep 2
 
 zfs create -o compression=lzjb -p $pool/ROOT/$pool
 
@@ -132,47 +160,62 @@ zfs set mountpoint=/$pool/ROOT/$pool/var $pool/var
 zfs mount $pool/var
 
 echo ####################################
-echo 'Now install world, kernel etc'
 zfs create $pool/installdata
 cd /$pool/installdata
 
-sleep 5
+if [ `pwd` != "/$pool/installdata" ]; then
+  echo "ERROR: Could not change directoy to /$pool/installdata. Aborting."
+  exit
+fi
+
+echo "Now installing base, ssys, slib and kernels via $ftphost. This may take a while, depending on your network connection."
+sleep 2
 arch=`uname -p`
 release=`uname -r`
+echo
+echo "Fetching FreeBSD ${release}-${arch}:"
 for pkg in base kernels; do
     mkdir /$pool/installdata/${pkg}
     cd /$pool/installdata/${pkg}
-    ftp "$ftphost:pub/FreeBSD/releases/${arch}/${release}/${pkg}/*"
+    echo " -> $pkg"
+    ftp -V "$ftphost:pub/FreeBSD/releases/${arch}/${release}/${pkg}/*"
 done
 mkdir /$pool/installdata/src
 cd /$pool/installdata/src/
-ftp "$ftphost:pub/FreeBSD/releases/${arch}/${release}/src/ssys*"
-ftp "$ftphost:pub/FreeBSD/releases/${arch}/${release}/src/slib*"
-ftp "$ftphost:pub/FreeBSD/releases/${arch}/${release}/src/install.sh"
+echo " -> ssys"
+ftp -V "$ftphost:pub/FreeBSD/releases/${arch}/${release}/src/ssys*"
+echo " -> slib"
+ftp -V "$ftphost:pub/FreeBSD/releases/${arch}/${release}/src/slib*"
+ftp -V "$ftphost:pub/FreeBSD/releases/${arch}/${release}/src/install.sh"
 
 export DESTDIR=/$pool/ROOT/$pool/
 
-cd /$pool/installdata/base ;   yes | sh ./install.sh
+echo
+echo "Extracting base into $DESTDIR"
+cd /$pool/installdata/base ; cat base.?? | tar --unlink -xpzf - -C ${DESTDIR:-/}
 cd /$pool/installdata/src ;     sh ./install.sh sys lib
-echo "Extracting kernel into $DESTDIR/boot"
+echo "Extracting kernel into ${DESTDIR}boot"
 cd /$pool/installdata/kernels ; sh ./install.sh generic
 
 cd /$pool/ROOT/$pool/boot ; cp -rp GENERIC/* /$pool/ROOT/$pool/boot/kernel/
 
 echo 'LOADER_ZFS_SUPPORT=YES' >> /$pool/ROOT/$pool/etc/make.conf
 
-echo "Build ZFS aware boot-loader"
+echo
+echo "I will now build the ZFS aware boot-loader, expect some funky compile output and ignore the errors."
+sleep 2
 echo '#!/bin/sh 
 mount -t devfs devfs /dev 
 export DESTDIR="" 
 cd /usr/src/sys/boot/ 
-make obj 
-make depend 
-make 
-cd /usr/src/sys/boot/i386/loader; make install 
-cd /usr/src/sys/boot/i386/zfsboot; make install 
-cd /usr/src/sys/boot/i386/gptzfsboot; make install 
-cd /usr/src/sys/boot/i386/pmbr; make install 
+make -s obj 
+make -s depend 
+make -s
+mkdir -p /usr/share/man/man5
+cd /usr/src/sys/boot/i386/loader; make -s install 
+cd /usr/src/sys/boot/i386/zfsboot; make -s install 
+cd /usr/src/sys/boot/i386/gptzfsboot; make -s install 
+cd /usr/src/sys/boot/i386/pmbr; make -s install 
 umount /dev 
 exit' > /$pool/ROOT/$pool/tmp/chroot-command.sh
 chmod +x /$pool/ROOT/$pool/tmp/chroot-command.sh
@@ -180,10 +223,13 @@ chroot /$pool/ROOT/$pool/ /tmp/chroot-command.sh
 rm /$pool/ROOT/$pool/tmp/chroot-command.sh
 zfs destroy $pool/installdata
 
-echo "Install new bootcode"
+echo
+echo "Installing new bootcode on disks: "
 for disk in $provider; do
-  gpart bootcode -b /$pool/ROOT/$pool/boot/pmbr -p /$pool/ROOT/$pool/boot/gptzfsboot -i 1 $disk
+  echo " ->  ${disk}"
+  gpart bootcode -b /$pool/ROOT/$pool/boot/pmbr -p /$pool/ROOT/$pool/boot/gptzfsboot -i 1 $disk > /dev/null
 done
+echo
 
 # We need to fix /var so it is mounted correct when booting from ZFS
 zfs umount $pool/var
@@ -207,10 +253,13 @@ echo 'zfs_enable="YES"' >> /$pool/ROOT/$pool/etc/rc.conf
 touch /$pool/ROOT/$pool/etc/fstab
 
 if [ "$swapsize" ]; then
+  echo "Adding swap partitions in fstab:"
   for disk in $provider; do
+    echo " ->  /dev/gpt/swap-${disk}"
     echo "/dev/gpt/swap-${disk} none swap sw 0 0" >> /$pool/ROOT/$pool/etc/fstab
   done
 fi
+echo
 
 # Copy the zpool.cache to the new filesystem
 cp /boot/zfs/zpool.cache /$pool/ROOT/$pool/boot/zfs/zpool.cache
